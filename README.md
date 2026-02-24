@@ -1,178 +1,78 @@
 # skyvista
 
-**PyVista-based 3D visualization for atmospheric data**
+**3D atmospheric data visualization in Python**
 
-`skyvista` provides powerful, publication-quality 3D visualizations for atmospheric modeling data using PyVista. Built for atmospheric scientists working with numerical weather models, trajectory data, and volumetric atmospheric fields.
+`skyvista` provides scientifically accurate 3D data of atmospheric science data (but likely applicable in many other disciplines). Skyvista's visualizations are primarily built on top of the [pyvista](https://pyvista.org/#) library, and with the appropriate setup can be rendered directly in jupyter notebooks or IDEs, or written to disk. Pyvista is capable of creating interactive visualizations in pure HTML, making these visualizations conveniently portable. Skyvista also contains simplified functionality for creating animations of 3D data using pyvista, in addition to single visualizations.
+
+Skyvista also contains functionality for exporting meshes and volumes created with pyvista to a variety of file formats. One intended use of this functionality is to create visualizations in Blender, using the optional `[blender]` addon functionality. Skyvista can handle things like setting up animations from a set of single-timestep output files, assigning shaders, as well as more complicated logic.
+
+**Further documentation is forthcoming!**
 
 ## Features
 
-- **3D Trajectory Visualization**: Render particle trajectories with customizable appearance
-- **Isosurface Rendering**: Create contours and isosurfaces from 3D atmospheric fields
-- **Vector Field Plotting**: Visualize wind fields and other vector quantities
-- **Animation Support**: Generate smooth animations of time-evolving atmospheric data
-- **Camera Control**: Advanced camera positioning and following for dynamic views
-- **Blender Export**: Export meshes to Blender for high-quality rendering
-- **Subplot Support**: Create multi-panel 3D visualizations
-- **Convenience API**: Simple functions for common visualization tasks
+- **Gridded data visualization**: Create sets of isosurfaces, volumes, vectors, or planes (for things like land/ocean surfaces or cross-sections) from xarray datasets
+- **Trajectory visualization**: Visualize Lagrangian data, with options to show trajectories as continuous arrows or as particles at their instantaneous positions (among other visualization customizations)
+- **Animation support**: Generate animations of time-evolving atmospheric data
+- **Camera control**: Advanced camera positioning and following for dynamic views
+- **Blender functionality**: Export meshes to Blender and setup scenes and animations
+- **Convenience API**: Simple functions for quick visualizations
 
 ## Installation
 
-```bash
-pip install skyvista
-```
+First install Skyvista, which will install pyvista as a dependency:
 
-For local development:
 ```bash
-pip install -e /path/to/skyvista
+pip install git@github.com:cmdavis4/skyvista.git
+```
+From here, pyvista configuration may be complicated depending on your setup. We recommend following the [pyvista installation documentation](https://docs.pyvista.org/getting-started/installation.html) and ensuring that you can successfully create an interactive bunny visualization, following the documentation's example:
+```
+from pyvista import examples
+dataset = examples.download_bunny()
+dataset.plot(cpos='xy')
 ```
 
 ## Quick Start
 
-### Simple Trajectory Plot
 
-```python
-import skyvista as sv
-import numpy as np
-
-# Create sample trajectory data
-time = np.linspace(0, 10, 100)
-trajectory_data = {
-    'x': np.sin(time) * 10,
-    'y': np.cos(time) * 10,
-    'z': time * 2,
-}
-
-# Quick plot
-sv.quick_plot(trajectory_data)
-```
-
-### Plot with Atmospheric Data
+### Gridded model or observation data
 
 ```python
 import skyvista as sv
 import xarray as xr
 
-# Load your atmospheric model data
-data = xr.open_dataset("model_output.nc")
+# Create a plot of vertical velocity and condensate loading isosurfaces
 
-# Create isosurface specification
-contour_spec = sv.make_contour(
-    data_array=data['cloud_water'],
-    isovalues=[0.001, 0.01],
-    opacity=0.3,
-    color='white'
-)
-
-# Plot with trajectories
-sv.plot_rams_and_trajectories(
-    rams_data={'contours': [contour_spec]},
-    trajectory_data=trajectory_data,
-    show=True
-)
-```
-
-## Core Concepts
-
-### Data Specifications
-
-`skyvista` uses specification objects to define how data should be rendered:
-
-- **`PVContourSpec`**: Isosurface/contour specifications
-- **`PVVectorSpec`**: Vector field specifications
-- **`PVTrajectorySpec`**: Trajectory rendering specifications
-- **`PV2DSpec`**: 2D slice specifications
-
-### Convenience Functions
-
-For quick visualizations:
-
-- **`quick_plot()`**: Instantly visualize data with defaults
-- **`plot_trajectories_only()`**: Focus on trajectories
-- **`plot_isosurfaces_only()`**: Focus on isosurfaces
-- **`make_contour()`**: Easy contour specification
-- **`make_vector()`**: Easy vector field specification
-- **`make_trajectory()`**: Easy trajectory specification
-
-### Advanced Usage
-
-```python
-import skyvista as sv
-
-# Initialize custom plotter with subplots
-plotter = sv.initialize_plotter(
-    shape=(1, 2),  # 1 row, 2 columns
-    window_size=(1600, 800)
-)
-
-# Add data to specific subplots
-sv.add_mesh_to_subplots(
-    plotter,
-    mesh,
-    subplot_keys=[(0, 0)],  # First subplot
-    name="data"
-)
-
-# Control camera
-camera = sv.get_trajectory_camera(
-    trajectory_data,
-    offset=(50, 50, 20),
-    focal_point_offset=(0, 0, 0)
-)
-
-plotter.camera = camera
-plotter.show()
-```
-
-### Animation
-
-```python
-import skyvista as sv
-
-# Create animation from time series data
-sv.animate_trajectories(
-    trajectory_data=time_series_trajectories,
-    rams_data=atmospheric_fields,
-    output_path="animation.mp4",
-    fps=30,
-    quality=5
-)
-```
-
-### Blender Export
-
-```python
-import skyvista as sv
-
-# Export meshes for high-quality rendering in Blender
-sv.export_meshes_to_blender(
-    meshes={'cloud': cloud_mesh, 'trajectory': traj_mesh},
-    output_file="scene.blend"
-)
+# Load gridded data
+storm_ds = xr.open_dataset("model_output.nc")
+quick_plot(
+    simulation_ds=storm_ds,
+    contours={
+        # Vertical velocity
+        "W": {
+            "isosurfaces": [1, 3, 5, 10],
+            "cmap": "Greens",
+            "opacity": 0.8,
+        },
+        # Condensate loading
+        "RC": {
+            # Isosurfaces will be calculated automatically if not specified
+            "cmap": "Blues",
+            "opacity": 0.4,
+        }
+    },
 ```
 
 ## Data Format
 
-### Trajectory Data
+### Gridded data
 
-Trajectory data should be provided as dictionaries or DataFrames with spatial coordinates:
-
-```python
-trajectory_data = {
-    'x': array_of_x_coordinates,
-    'y': array_of_y_coordinates,
-    'z': array_of_z_coordinates,
-    'time': array_of_times  # optional
-}
-```
-
-### Atmospheric Fields
-
-Atmospheric data should be xarray DataArrays with named dimensions:
+Gridded data should be xarray `Dataset`s with dimensions `x`, `y`, `z`, and optionally `time` if creating an animation:
 
 ```python
 import xarray as xr
 
-# Example atmospheric field
+# Example DataArray; this should be a data variable in an xr.Dataset,
+# not passed directly into skyvista
 cloud_field = xr.DataArray(
     data=3d_array,
     dims=['x', 'y', 'z'],
@@ -183,56 +83,6 @@ cloud_field = xr.DataArray(
     }
 )
 ```
-
-## Examples
-
-See the documentation for comprehensive examples including:
-
-- Basic trajectory visualization
-- Isosurface rendering
-- Multi-panel plots
-- Animation workflows
-- Custom camera paths
-- Blender integration
-
-## API Reference
-
-### Main Functions
-
-- **`plot_rams_and_trajectories()`**: Main plotting function for combined visualization
-- **`animate_trajectories()`**: Create animations
-- **`initialize_plotter()`**: Create custom PyVista plotter
-
-### Convenience API
-
-- **`quick_plot()`**: Simplified plotting interface
-- **`plot_trajectories_only()`**: Trajectory-focused visualization
-- **`plot_isosurfaces_only()`**: Isosurface-focused visualization
-- **`make_contour()`**: Create contour specifications
-- **`make_vector()`**: Create vector field specifications
-- **`make_trajectory()`**: Create trajectory specifications
-
-### Utilities
-
-- **`get_trajectory_camera()`**: Position camera based on trajectories
-- **`calculate_camera_offset()`**: Calculate optimal camera positions
-- **`export_meshes_to_blender()`**: Export to Blender
-- **`rectangle_mesh()`**: Create 2D rectangular meshes
-- **`screenshot_render()`**: Capture high-resolution screenshots
-
-## Requirements
-
-- Python ≥ 3.8
-- PyVista ≥ 0.38
-- NumPy
-- xarray
-
-Optional:
-- bpy (Blender as a Python module) for Blender export
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit issues or pull requests.
 
 ## License
 
@@ -245,12 +95,8 @@ If you use skyvista in your research, please cite:
 ```bibtex
 @software{skyvista,
   author = {Davis, Charles},
-  title = {skyvista: PyVista-based 3D visualization for atmospheric data},
-  year = {2025},
+  title = {skyvista: 3D atmospheric data visualization in Python},
+  year = {2026},
   url = {https://github.com/cmdavis4/skyvista}
 }
 ```
-
----
-
-Built for atmospheric science visualization 🌤️📊
