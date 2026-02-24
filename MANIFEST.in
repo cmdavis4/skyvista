@@ -1,0 +1,7 @@
+include README.md
+include LICENSE
+include pytest.ini
+recursive-include skyvista *.py
+recursive-include tests *.py
+include CONVENIENCE_EXAMPLES.md
+include MIGRATION_GUIDE.md
