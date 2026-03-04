@@ -10,7 +10,8 @@ from cloudy_experimental.pvplotting.types_pvplotting import (
     PVConfig,
     PVContourSpec,
     PVMesh,
-    PVRamsData,
+    PVGriddedData,
+    PVRamsData,  # Keep for backwards compatibility testing
     PVTrajectoryData,
     PVTrajectorySpec,
     PVVarSpec,
@@ -85,23 +86,26 @@ class TestDataClasses:
 class TestTrajectoryData:
     """Test PVTrajectoryData functionality."""
 
-    def create_sample_trajectory_ds(self, n_parcels=10, n_times=5):
+    def create_sample_trajectory_ds(self, n_trajectories=10, n_times=5, use_legacy_name=False):
         """Create a sample trajectory dataset for testing."""
         times = np.arange(n_times)
-        parcel_ix = np.arange(n_parcels)
+        trajectory_ix = np.arange(n_trajectories)
+
+        # Support legacy dimension name for backwards compatibility tests
+        dim_name = "parcel_ix" if use_legacy_name else "trajectory_ix"
 
         # Create random trajectory data
-        x = np.random.rand(n_parcels, n_times) * 1000
-        y = np.random.rand(n_parcels, n_times) * 1000
-        z = np.random.rand(n_parcels, n_times) * 1000
+        x = np.random.rand(n_trajectories, n_times) * 1000
+        y = np.random.rand(n_trajectories, n_times) * 1000
+        z = np.random.rand(n_trajectories, n_times) * 1000
 
         ds = xr.Dataset(
             {
-                "x": (["parcel_ix", "time"], x),
-                "y": (["parcel_ix", "time"], y),
-                "z": (["parcel_ix", "time"], z),
+                "x": ([dim_name, "time"], x),
+                "y": ([dim_name, "time"], y),
+                "z": ([dim_name, "time"], z),
             },
-            coords={"parcel_ix": parcel_ix, "time": times},
+            coords={dim_name: trajectory_ix, "time": times},
         )
         return ds
 
@@ -111,9 +115,9 @@ class TestTrajectoryData:
         traj_data = PVTrajectoryData(trajectory_ds=ds, varspecs=())
         # After sanitization, ds may be modified, so check structure rather than identity
         assert len(traj_data.ds.dims) == 2
-        assert "parcel_ix" in traj_data.ds.dims
+        assert "trajectory_ix" in traj_data.ds.dims
         assert "time" in traj_data.ds.dims
-        assert traj_data.n_parcel_limit == 1000
+        assert traj_data.n_trajectory_limit == 1000
 
     def test_trajectory_data_sanitize_sorting(self):
         """Test that sanitize properly sorts by time."""
@@ -129,36 +133,48 @@ class TestTrajectoryData:
         expected_times = np.array([0, 1, 2])
         np.testing.assert_array_equal(traj_data.ds.time.values, expected_times)
 
-    def test_trajectory_data_parcel_limit(self):
-        """Test parcel limiting functionality."""
-        ds = self.create_sample_trajectory_ds(n_parcels=2000)  # More than default limit
+    def test_trajectory_data_trajectory_limit(self):
+        """Test trajectory limiting functionality."""
+        ds = self.create_sample_trajectory_ds(n_trajectories=2000)  # More than default limit
 
         # Warning is emitted during initialization
         with pytest.warns(UserWarning, match="Limiting to 100 trajectories"):
             traj_data = PVTrajectoryData(
-                trajectory_ds=ds, n_parcel_limit=100, varspecs=()
+                trajectory_ds=ds, n_trajectory_limit=100, varspecs=()
             )
 
-        assert len(traj_data.ds.parcel_ix) == 100
+        assert len(traj_data.ds.trajectory_ix) == 100
 
     def test_trajectory_data_empty_time_error(self):
         """Test error handling for empty time dimension."""
         # Create dataset with empty time dimension
         ds = xr.Dataset(
-            {"x": (["parcel_ix", "time"], np.array([]).reshape(0, 0))},
-            coords={"parcel_ix": [], "time": []},
+            {"x": (["trajectory_ix", "time"], np.array([]).reshape(0, 0))},
+            coords={"trajectory_ix": [], "time": []},
         )
 
         # Error should be raised during initialization due to sanitize in __post_init__
         with pytest.raises(ValueError, match="time.*dimension of length 0"):
             PVTrajectoryData(trajectory_ds=ds, varspecs=())
 
+    def test_backwards_compatibility_parcel_ix(self):
+        """Test that parcel_ix dimension name still works with deprecation warning."""
+        ds = self.create_sample_trajectory_ds(use_legacy_name=True)
 
-class TestRamsData:
-    """Test PVRamsData functionality."""
+        # Should emit deprecation warning
+        with pytest.warns(DeprecationWarning, match="parcel_ix.*deprecated.*trajectory_ix"):
+            traj_data = PVTrajectoryData(trajectory_ds=ds, varspecs=())
 
-    def create_sample_rams_ds(self, nx=10, ny=10, nz=5, n_times=3):
-        """Create a sample RAMS dataset for testing."""
+        # Data should still be usable
+        assert "parcel_ix" in traj_data.ds.dims
+        assert "time" in traj_data.ds.dims
+
+
+class TestGriddedData:
+    """Test PVGriddedData functionality."""
+
+    def create_sample_gridded_ds(self, nx=10, ny=10, nz=5, n_times=3):
+        """Create a sample gridded dataset for testing."""
         x = np.linspace(0, 1000, nx)
         y = np.linspace(0, 1000, ny)
         z = np.linspace(0, 5000, nz)
@@ -173,28 +189,37 @@ class TestRamsData:
         )
         return ds
 
-    def test_rams_data_basic(self):
-        """Test basic PVRamsData creation."""
-        ds = self.create_sample_rams_ds()
-        rams_data = PVRamsData(simulation_ds=ds, varspecs=())
+    def test_gridded_data_basic(self):
+        """Test basic PVGriddedData creation."""
+        ds = self.create_sample_gridded_ds()
+        gridded_data = PVGriddedData(simulation_ds=ds, varspecs=())
         # After sanitization, ds may be modified, so check structure rather than identity
-        assert "temperature" in rams_data.ds.data_vars
-        assert "x" in rams_data.ds.dims
-        assert "y" in rams_data.ds.dims
-        assert "z" in rams_data.ds.dims
+        assert "temperature" in gridded_data.ds.data_vars
+        assert "x" in gridded_data.ds.dims
+        assert "y" in gridded_data.ds.dims
+        assert "z" in gridded_data.ds.dims
 
-    def test_rams_data_sanitize_transpose(self):
+    def test_gridded_data_sanitize_transpose(self):
         """Test that sanitize properly transposes dimensions."""
         # Create dataset with dimensions in wrong order
-        ds = self.create_sample_rams_ds()
+        ds = self.create_sample_gridded_ds()
         ds = ds.transpose("time", "z", "y", "x")  # Wrong order
 
-        rams_data = PVRamsData(simulation_ds=ds, varspecs=())
-        rams_data.sanitize()
+        gridded_data = PVGriddedData(simulation_ds=ds, varspecs=())
+        gridded_data.sanitize()
 
         # Check that dimensions are in correct order
         expected_dims = ("x", "y", "z", "time")
-        assert rams_data.ds.temperature.dims == expected_dims
+        assert gridded_data.ds.temperature.dims == expected_dims
+
+    def test_backwards_compatibility_rams_data(self):
+        """Test that PVRamsData alias still works."""
+        ds = self.create_sample_gridded_ds()
+        # PVRamsData should still work as an alias
+        rams_data = PVRamsData(simulation_ds=ds, varspecs=())
+        assert "temperature" in rams_data.ds.data_vars
+        # Verify it's actually a PVGriddedData instance
+        assert isinstance(rams_data, PVGriddedData)
 
 
 class TestUtilityFunctions:
@@ -233,8 +258,8 @@ class TestUtilityFunctions:
 class TestMeshCreation:
     """Test basic mesh creation functionality."""
 
-    def create_simple_rams_data(self, varspecs=()):
-        """Create simple RAMS data for testing."""
+    def create_simple_gridded_data(self, varspecs=()):
+        """Create simple gridded data for testing."""
         x = np.linspace(0, 1000, 3)
         y = np.linspace(0, 1000, 3)
         z = np.linspace(0, 1000, 3)
@@ -246,25 +271,25 @@ class TestMeshCreation:
         ds = xr.Dataset(
             {"temperature": (["x", "y", "z"], temp)}, coords={"x": x, "y": y, "z": z}
         )
-        return PVRamsData(simulation_ds=ds, varspecs=varspecs)
+        return PVGriddedData(simulation_ds=ds, varspecs=varspecs)
 
     def create_simple_trajectory_data(self, varspecs=()):
         """Create simple trajectory data for testing."""
         times = np.array([0, 1, 2])
-        parcel_ix = np.array([0, 1])
+        trajectory_ix = np.array([0, 1])
 
         # Simple straight-line trajectories
-        x = np.array([[0, 100, 200], [0, 150, 300]])  # 2 parcels, 3 times
+        x = np.array([[0, 100, 200], [0, 150, 300]])  # 2 trajectories, 3 times
         y = np.array([[0, 100, 200], [50, 150, 250]])
         z = np.array([[100, 150, 200], [200, 250, 300]])
 
         ds = xr.Dataset(
             {
-                "x": (["parcel_ix", "time"], x),
-                "y": (["parcel_ix", "time"], y),
-                "z": (["parcel_ix", "time"], z),
+                "x": (["trajectory_ix", "time"], x),
+                "y": (["trajectory_ix", "time"], y),
+                "z": (["trajectory_ix", "time"], z),
             },
-            coords={"parcel_ix": parcel_ix, "time": times},
+            coords={"trajectory_ix": trajectory_ix, "time": times},
         )
         return PVTrajectoryData(trajectory_ds=ds, varspecs=varspecs)
 

@@ -1,8 +1,8 @@
 # skyvista
 
-**3D atmospheric data visualization in Python**
+**3D gridded atmospheric data visualization in Python**
 
-`skyvista` provides scientifically accurate 3D data of atmospheric science data (but likely applicable in many other disciplines). Skyvista's visualizations are primarily built on top of the [pyvista](https://pyvista.org/#) library, and with the appropriate setup can be rendered directly in jupyter notebooks or IDEs, or written to disk. Pyvista is capable of creating interactive visualizations in pure HTML, making these visualizations conveniently portable. Skyvista also contains simplified functionality for creating animations of 3D data using pyvista, in addition to single visualizations.
+`skyvista` provides scientifically accurate 3D visualization of gridded atmospheric science data (but likely applicable in many other disciplines). Skyvista's visualizations are primarily built on top of the [pyvista](https://pyvista.org/#) library, and with the appropriate setup can be rendered directly in jupyter notebooks or IDEs, or written to disk. Pyvista is capable of creating interactive visualizations in pure HTML, making these visualizations conveniently portable. Skyvista also contains simplified functionality for creating animations of 3D data using pyvista, in addition to single visualizations.
 
 Skyvista also contains functionality for exporting meshes and volumes created with pyvista to a variety of file formats. One intended use of this functionality is to create visualizations in Blender, using the optional `[blender]` addon functionality. Skyvista can handle things like setting up animations from a set of single-timestep output files, assigning shaders, as well as more complicated logic.
 
@@ -11,8 +11,8 @@ Skyvista also contains functionality for exporting meshes and volumes created wi
 ## Features
 
 - **Gridded data visualization**: Create sets of isosurfaces, volumes, vectors, or planes (for things like land/ocean surfaces or cross-sections) from xarray datasets
-- **Trajectory visualization**: Visualize Lagrangian data, with options to show trajectories as continuous arrows or as particles at their instantaneous positions (among other visualization customizations)
-- **Animation support**: Generate animations of time-evolving atmospheric data
+- **Trajectory visualization**: Visualize Lagrangian trajectory data, with options to show trajectories as continuous arrows or as particles at their instantaneous positions (among other visualization customizations)
+- **Animation support**: Generate animations of time-evolving gridded atmospheric data
 - **Camera control**: Advanced camera positioning and following for dynamic views
 - **Blender functionality**: Export meshes to Blender and setup scenes and animations
 - **Convenience API**: Simple functions for quick visualizations
@@ -95,7 +95,7 @@ If you use skyvista in your research, please cite:
 ```bibtex
 @software{skyvista,
   author = {Davis, Charles},
-  title = {skyvista: 3D atmospheric data visualization in Python},
+  title = {skyvista: 3D gridded atmospheric data visualization in Python},
   year = {2026},
   url = {https://github.com/cmdavis4/skyvista}
 }

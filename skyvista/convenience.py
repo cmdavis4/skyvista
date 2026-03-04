@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .types_pvplotting import (
     PVConfig,
-    PVRamsData,
+    PVGriddedData,
     PVTrajectoryData,
     PVContourSpec,
     PVVolumeSpec,
@@ -19,7 +19,7 @@ from .types_pvplotting import (
     PVVectorSpec,
     PVTrajectorySpec,
 )
-from .core_pvplotting import plot_rams_and_trajectories
+from .core_pvplotting import plot_gridded_and_trajectories
 from .plotter import initialize_plotter
 
 # ============================================================================
@@ -467,7 +467,7 @@ def quick_plot(
 
         if varspecs:
             pv_datas.append(
-                PVRamsData(simulation_ds=simulation_ds, varspecs=tuple(varspecs))
+                PVGriddedData(simulation_ds=simulation_ds, varspecs=tuple(varspecs))
             )
 
     # Handle trajectory data
@@ -485,7 +485,7 @@ def quick_plot(
             PVTrajectoryData(
                 trajectory_ds=trajectory_ds,
                 varspecs=(traj_spec,),
-                n_parcel_limit=trajectory_limit,
+                n_trajectory_limit=trajectory_limit,
             )
         )
 
@@ -509,7 +509,7 @@ def quick_plot(
     )
 
     # Call the main plotting function
-    return plot_rams_and_trajectories(pv_config=pv_config, pv_datas=pv_datas)
+    return plot_gridded_and_trajectories(pv_config=pv_config, pv_datas=pv_datas)
 
 
 # ============================================================================

@@ -5,7 +5,7 @@ import matplotlib as mpl
 
 from .types_pvplotting import PVContourSpec, PVMesh
 from ..types_core import BlenderObject
-from .core_pvplotting import plot_rams_and_trajectories
+from .core_pvplotting import plot_gridded_and_trajectories
 from ..utils import to_kv_str, to_kv_pairs, dt_to_str
 
 import pyvista as pv

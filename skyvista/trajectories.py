@@ -3,13 +3,12 @@
 # ============================================================================
 
 import numpy as np
-from .types_pvplotting import PVTrajectoryData, PVTrajectorySpec
+from .types_sv import PVTrajectoryData, PVTrajectorySpec, PVMesh
 import pyvista as pv
 import xarray as xr
 from typing import Any, Dict, List, Optional, Union
 
-from ..utils import maybe_cast_to_float, to_kv_str
-from .types_pvplotting import PVMesh
+from skyutils import maybe_cast_to_float, to_kv_str
 
 
 def create_trajectory_polydata(
@@ -26,7 +25,7 @@ def create_trajectory_polydata(
 
     Args:
         trajectory_data_list (list): List of trajectory data dictionaries, each
-            containing 'points' (Nx3 coordinates) and 'parcel_ix' keys.
+            containing 'points' (Nx3 coordinates) and 'trajectory_ix' keys.
         scalar (str, optional): Name of scalar field if present in trajectory data.
             Defaults to None.
 
@@ -35,8 +34,8 @@ def create_trajectory_polydata(
 
     Example:
         >>> traj_data = [
-        ...     {'points': np.array([[0,0,0], [1,1,1]]), 'parcel_ix': 0},
-        ...     {'points': np.array([[2,0,0], [3,1,1]]), 'parcel_ix': 1}
+        ...     {'points': np.array([[0,0,0], [1,1,1]]), 'trajectory_ix': 0},
+        ...     {'points': np.array([[2,0,0], [3,1,1]]), 'trajectory_ix': 1}
         ... ]
         >>> mesh = create_trajectory_polydata(traj_data)
     """
@@ -163,7 +162,7 @@ def create_trajectory_mesh(
         decimation_target (float, optional): Target fraction for mesh decimation.
             Defaults to None (no decimation).
         tube_resolution (int, optional): Radial resolution of tubes. Defaults to 4.
-        label_scalar (bool or str, optional): Labeling mode. If True, labels with parcel_ix.
+        label_scalar (bool or str, optional): Labeling mode. If True, labels with trajectory_ix.
             If string matching scalar name, labels with scalar value at trajectory end.
             Defaults to False.
 
@@ -229,7 +228,10 @@ def create_trajectory_mesh(
                 if isinstance(label_scalar, str) and label_scalar in traj_data:
                     label_value = "{:.2f}".format(traj_data[label_scalar][-1])
                 elif label_scalar is True:
-                    label_value = traj_data["parcel_ix"]
+                    # Check for trajectory_ix first, fall back to parcel_ix for backwards compatibility
+                    label_value = traj_data.get(
+                        "trajectory_ix", traj_data.get("parcel_ix")
+                    )
 
                 if label_value is not None:
                     label_center = np.copy(head_center)
@@ -328,9 +330,9 @@ def generate_trajectory_mesh(
         PVMesh: Single mesh object containing all trajectories with specifications.
 
     Example:
-        >>> traj_data = PVTrajectoryData(parcel_ds)
+        >>> traj_data = PVTrajectoryData(trajectory_ds)
         >>> traj_spec = PVTrajectorySpec(varname='trajectories', scalar='temperature')
-        >>> pv_mesh = generate_trajectory_meshes_single_mesh(traj_data, traj_spec)
+        >>> pv_mesh = generate_trajectory_mesh(traj_data, traj_spec)
     """
 
     arrow_color_scalar = trajectory_spec.scalar
@@ -386,7 +388,14 @@ def generate_trajectory_mesh(
     x_data = trajectory_ds["x"].values
     y_data = trajectory_ds["y"].values
     z_data = trajectory_ds["z"].values
-    parcel_indices = trajectory_ds["parcel_ix"].values
+
+    # Handle trajectory_ix with backwards compatibility for parcel_ix
+    if "trajectory_ix" in trajectory_ds.dims:
+        trajectory_indices = trajectory_ds["trajectory_ix"].values
+        trajectory_ix_key = "trajectory_ix"
+    else:
+        trajectory_indices = trajectory_ds["parcel_ix"].values
+        trajectory_ix_key = "parcel_ix"
 
     # Pre-extract scalar data if needed
     arrow_color_scalar_data = None
@@ -399,7 +408,7 @@ def generate_trajectory_mesh(
     if isinstance(label_scalar, str):
         label_scalar_data = maybe_cast_to_float(trajectory_ds[label_scalar].values)
 
-    for i, parcel_ix in enumerate(parcel_indices):
+    for i, trajectory_ix in enumerate(trajectory_indices):
         xyz_points = np.column_stack([x_data[i], y_data[i], z_data[i]])
         valid_mask = ~(np.isnan(xyz_points).any(axis=1))
 
@@ -409,7 +418,7 @@ def generate_trajectory_mesh(
         valid_points = xyz_points[valid_mask]
 
         trajectory_points_data = {
-            "parcel_ix": parcel_ix,
+            trajectory_ix_key: trajectory_ix,
             "points": valid_points,
         }
 

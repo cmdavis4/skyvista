@@ -9,9 +9,9 @@ This document shows how the new convenience API simplifies common plotting tasks
 **Before (verbose):**
 ```python
 from cloudy.pvplotting import (
-    PVConfig, PVRamsData, PVTrajectoryData,
+    PVConfig, PVGriddedData, PVTrajectoryData,
     PVContourSpec, PVTrajectorySpec,
-    plot_rams_and_trajectories, initialize_plotter
+    plot_gridded_and_trajectories, initialize_plotter
 )
 
 # Create plotter
@@ -32,7 +32,7 @@ trajectory_spec = PVTrajectorySpec(
 )
 
 # Create data objects
-rams_data = PVRamsData(
+gridded_data = PVGriddedData(
     simulation_ds=sim_ds,
     varspecs=(contour_spec,)
 )
@@ -40,7 +40,7 @@ rams_data = PVRamsData(
 trajectory_data = PVTrajectoryData(
     trajectory_ds=traj_ds,
     varspecs=(trajectory_spec,),
-    n_parcel_limit=1000
+    n_trajectory_limit=1000
 )
 
 # Create config
@@ -50,7 +50,7 @@ pv_config = PVConfig(
 )
 
 # Plot
-meshes = plot_rams_and_trajectories(pv_config, [rams_data, trajectory_data])
+meshes = plot_gridded_and_trajectories(pv_config, [gridded_data, trajectory_data])
 ```
 
 **After (simple):**
@@ -74,9 +74,9 @@ meshes = quick_plot(
 **Before:**
 ```python
 from cloudy.pvplotting import (
-    PVConfig, PVRamsData, PVTrajectoryData,
+    PVConfig, PVGriddedData, PVTrajectoryData,
     PVContourSpec, PVTrajectorySpec,
-    plot_rams_and_trajectories, initialize_plotter
+    plot_gridded_and_trajectories, initialize_plotter
 )
 
 plotter = initialize_plotter()
@@ -99,7 +99,7 @@ trajectory_spec = PVTrajectorySpec(
     scalar='height'
 )
 
-rams_data = PVRamsData(
+gridded_data = PVGriddedData(
     simulation_ds=sim_ds,
     varspecs=(theta_spec, rv_spec)
 )
@@ -116,7 +116,7 @@ pv_config = PVConfig(
     fps=15
 )
 
-meshes = plot_rams_and_trajectories(pv_config, [rams_data, trajectory_data])
+meshes = plot_gridded_and_trajectories(pv_config, [gridded_data, trajectory_data])
 ```
 
 **After:**
@@ -146,7 +146,7 @@ meshes = quick_plot(
 ```python
 from cloudy.pvplotting import (
     PVConfig, PVTrajectoryData, PVTrajectorySpec,
-    plot_rams_and_trajectories, initialize_plotter
+    plot_gridded_and_trajectories, initialize_plotter
 )
 
 plotter = initialize_plotter()
@@ -163,7 +163,7 @@ trajectory_data = PVTrajectoryData(
 
 pv_config = PVConfig(plotter=plotter)
 
-meshes = plot_rams_and_trajectories(pv_config, [trajectory_data])
+meshes = plot_gridded_and_trajectories(pv_config, [trajectory_data])
 ```
 
 **After:**
@@ -180,9 +180,9 @@ meshes = plot_trajectories_only(traj_ds, color='red')
 **Before:**
 ```python
 from cloudy.pvplotting import (
-    PVConfig, PVRamsData, PVTrajectoryData,
+    PVConfig, PVGriddedData, PVTrajectoryData,
     PVVectorSpec, PVTrajectorySpec,
-    plot_rams_and_trajectories, initialize_plotter
+    plot_gridded_and_trajectories, initialize_plotter
 )
 
 plotter = initialize_plotter()
@@ -201,7 +201,7 @@ trajectory_spec = PVTrajectorySpec(
     scalar='temperature'
 )
 
-rams_data = PVRamsData(
+gridded_data = PVGriddedData(
     simulation_ds=sim_ds,
     varspecs=(vector_spec,)
 )
@@ -213,7 +213,7 @@ trajectory_data = PVTrajectoryData(
 
 pv_config = PVConfig(plotter=plotter)
 
-meshes = plot_rams_and_trajectories(pv_config, [rams_data, trajectory_data])
+meshes = plot_gridded_and_trajectories(pv_config, [gridded_data, trajectory_data])
 ```
 
 **After:**
@@ -236,8 +236,8 @@ For users who need more control but still want less verbosity:
 
 ```python
 from cloudy.pvplotting import (
-    plot_rams_and_trajectories,
-    PVConfig, PVRamsData, PVTrajectoryData,
+    plot_gridded_and_trajectories,
+    PVConfig, PVGriddedData, PVTrajectoryData,
     make_contour, make_trajectory  # Factory functions
 )
 
@@ -247,11 +247,11 @@ rv_spec = make_contour('RV', isosurfaces=[0.01], color='blue')
 traj_spec = make_trajectory(scalar='temperature', cmap='viridis', scalar_bar=True)
 
 # Still use the full API for control
-rams_data = PVRamsData(simulation_ds=sim_ds, varspecs=(theta_spec, rv_spec))
+gridded_data = PVGriddedData(simulation_ds=sim_ds, varspecs=(theta_spec, rv_spec))
 traj_data = PVTrajectoryData(trajectory_ds=traj_ds, varspecs=(traj_spec,))
 config = PVConfig(animation=True, gif_path='out.gif')
 
-meshes = plot_rams_and_trajectories(config, [rams_data, traj_data])
+meshes = plot_gridded_and_trajectories(config, [gridded_data, traj_data])
 ```
 
 ## API Levels Summary

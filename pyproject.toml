@@ -31,6 +31,7 @@ dependencies = [
     "pyvista>=0.38",
     "numpy",
     "xarray",
+    "skimage"
 ]
 
 [project.optional-dependencies]

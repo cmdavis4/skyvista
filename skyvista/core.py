@@ -35,7 +35,7 @@ from itertools import product
 
 from .plotter import initialize_plotter
 
-from .types_pvplotting import (
+from .types_sv import (
     PV2DSpec,
     PVConfig,
     PVContourSpec,
@@ -47,7 +47,7 @@ from .types_pvplotting import (
     PVVolumeSpec,
     PVVectorSpec,
 )
-from .trajectories_pvplotting import generate_trajectory_mesh
+from .trajectories import generate_trajectory_mesh
 import pyvista as pv
 import numpy as np
 import matplotlib.pyplot as plt
@@ -63,9 +63,7 @@ import numpy as np
 from skimage.measure import marching_cubes
 import meshio
 
-from ..utils import to_kv_str, TwoWayDict
-from ..rams import to_t_minutes
-from ..types_core import PathLike
+from skyutils import TwoWayDict, to_t_minutes
 
 # Allow empty meshes globally, since the individual varspecs handle whether to actually
 # include them
@@ -647,101 +645,34 @@ def sanitize_inputs(pv_datas: List[PVData]):
 # ============================================================================
 
 
-def plot_rams_and_trajectories(
+def plot_gridded_and_trajectories(
     pv_config: PVConfig, pv_datas: List[PVData]
 ) -> Dict[Any, List[PVMesh]]:
     """
-    Create 3D visualization of atmospheric data as still image or animation.
+    Create 3D visualization of gridded atmospheric data as still image or animation.
 
     Unified function for creating both static visualizations and animations of
-    atmospheric simulation data and trajectory data. Handles isosurface generation,
+    gridded simulation data and trajectory data. Handles isosurface generation,
     trajectory rendering, camera control, and export options.
 
     Args:
-        parcel_ds (xr.Dataset, optional): Trajectory dataset with 'parcel_ix' and
-            'time' dimensions, containing 'x', 'y', 'z' position variables.
-        simulation_ds (xr.Dataset, optional): Atmospheric simulation dataset with
-            'x', 'y', 'z', and optionally 'time' dimensions.
-        plotter (pv.Plotter, optional): PyVista plotter instance. If None, creates new one.
-        kwargs_contour (dict, optional): 3D contour specifications. Format:
-            {'variable_name': {'isosurfaces': [val1, val2], 'opacity': 0.5, ...}}.
-        kwargs_2d (dict, optional): 2D slice specifications. Format:
-            {'variable_name': {'opacity': 0.8, ...}}.
-        subplot_included_meshes (dict, optional): Subplot inclusion mapping for
-            multi-panel plots. Format: {(row, col): ['mesh1', 'mesh2']}.
-        trajectory_color_or_scalar (str, optional): Trajectory coloring. Can be
-            variable name for scalar coloring or color name for solid coloring.
-        trajectory_cmap (str, optional): Colormap name for trajectory scalar coloring.
-        trajectory_silhouettes (bool, optional): Enable trajectory silhouettes.
-            Defaults to False.
-        title (str, optional): Custom title text for the plot.
-        trajectory_clim (list, optional): Color limits [min, max] for trajectory scalars.
-        show (bool, optional): Whether to display the plot. Defaults to True.
-        opacity (float, optional): Global opacity for meshes (0.0-1.0).
-        scalar_bars (list, optional): List of scalar bar names to keep. Others removed.
-        screenshot_path (Path, optional): Path for saving screenshot image.
-        export_html (bool, optional): Export HTML version alongside screenshot.
-            Defaults to False.
-        jupyter_backend (str, optional): Jupyter display backend ('pythreejs', etc.).
-        label_trajectories (bool, optional): Add 3D text labels to trajectories.
-            Not recommended for animations. Defaults to False.
-        particles (bool, optional): Render trajectories as particles instead of arrows.
-            Defaults to False.
-        add_grid_mesh (bool, optional): Add background coordinate grid. Defaults to False.
-        bunny (bool, optional): Special bunny-shaped particles mode. Defaults to False.
-        trajectory_scalar_bar_args (dict, optional): Scalar bar customization arguments.
-        interactive (bool, optional): Enable interactive controls. Defaults to True.
-        individual_meshes (bool, optional): Create separate mesh for each isosurface
-            value instead of single mesh with multiple isosurfaces. Defaults to False.
-        add_meshes (bool, optional): Whether to add meshes to plotter. If False,
-            only creates and returns meshes. Defaults to True.
-        animate (bool, optional): Create animation instead of still image. Defaults to False.
-        gif_path (str, optional): Output path for animation GIF. Required if animate=True.
-        fps (int, optional): Animation frames per second. Defaults to 10.
-        show_gif (bool, optional): Display animation in notebook after creation.
-            Defaults to True.
-        callback (callable, optional): User callback function called for each frame.
-            Signature: callback(plotter, current_time, simulation_ds, parcel_ds, trajectory_meshes).
-        show_interactive_slider (bool, optional): When animate=True, also display
-            an interactive PyVista render with time slider for exploring animation data.
-            Defaults to True.
-        **trajectory_arrow_kwargs: Additional arguments for trajectory arrow styling
-            (body_radius, head_length_frac, etc.).
+        pv_config (PVConfig): Configuration object for plotter settings, animation, exports.
+        pv_datas (List[PVData]): List of data objects (PVGriddedData and/or PVTrajectoryData).
 
     Returns:
-        dict: Dictionary mapping times to lists of PVMesh objects.
-            For animations, keyed by time. For still images, keyed by last_time.
-
-    Raises:
-        ValueError: If animate=True but gif_path is not provided, or if datasets
-            have incompatible time dimensions.
+        dict: Dictionary mapping times to PVMesh objects, organized by variable spec name.
 
     Examples:
-        Create still image with trajectories and temperature isosurfaces:
-        >>> meshes = plot_trajectories(
-        ...     simulation_ds=sim_data,
-        ...     parcel_ds=trajectory_data,
-        ...     kwargs_contour={'temperature': {'isosurfaces': [15, 20, 25]}},
-        ...     trajectory_color_or_scalar='temperature',
-        ...     animate=False
+        >>> config = PVConfig(animation=True, gif_path='output.gif')
+        >>> gridded_data = PVGriddedData(
+        ...     simulation_ds=sim_ds,
+        ...     varspecs=(PVContourSpec(varname='THETA', isosurfaces=[300, 310]),)
         ... )
-
-        Create animation:
-        >>> plot_trajectories(
-        ...     simulation_ds=sim_data,
-        ...     parcel_ds=trajectory_data,
-        ...     kwargs_contour={'temperature': {'isosurfaces': [20]}},
-        ...     animate=True,
-        ...     gif_path='temperature_evolution.gif',
-        ...     fps=15
+        >>> traj_data = PVTrajectoryData(
+        ...     trajectory_ds=traj_ds,
+        ...     varspecs=(PVTrajectorySpec(scalar='temperature'),)
         ... )
-
-        Individual isosurface meshes:
-        >>> meshes = plot_trajectories(
-        ...     simulation_ds=sim_data,
-        ...     kwargs_contour={'RV': {'isosurfaces': [0.01, 0.02, 0.03]}},
-        ...     individual_meshes=True  # Creates RV_iso-0.01, RV_iso-0.02, RV_iso-0.03
-        ... )
+        >>> meshes = plot_gridded_and_trajectories(config, [gridded_data, traj_data])
     """
 
     # Validate and prepare input datasets
@@ -863,6 +794,26 @@ def plot_rams_and_trajectories(
     return TwoWayDict(
         {dt: {mesh.varspec.name: mesh for mesh in dt_l} for dt, dt_l in meshes.items()}
     )
+
+
+# Deprecated alias for backwards compatibility
+def plot_rams_and_trajectories(
+    pv_config: PVConfig, pv_datas: List[PVData]
+) -> Dict[Any, List[PVMesh]]:
+    """
+    Deprecated: Use plot_gridded_and_trajectories instead.
+
+    This function is kept for backwards compatibility and will be removed in a future version.
+    """
+    from warnings import warn
+
+    warn(
+        "plot_rams_and_trajectories is deprecated. Use plot_gridded_and_trajectories"
+        " instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return plot_gridded_and_trajectories(pv_config, pv_datas)
 
 
 def _create_interactive_time_slider(

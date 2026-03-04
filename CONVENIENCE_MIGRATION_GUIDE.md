@@ -17,7 +17,7 @@ The pvplotting module now includes a simplified convenience API that makes commo
 
 ### Backward Compatibility
 
-**All existing code continues to work!** The original API using `plot_rams_and_trajectories()` with dataclasses is unchanged. This is purely additive.
+**All existing code continues to work!** The original API using `plot_gridded_and_trajectories()` with dataclasses is unchanged. This is purely additive.
 
 ## Quick Migration Examples
 
@@ -26,7 +26,7 @@ The pvplotting module now includes a simplified convenience API that makes commo
 ```python
 # Old way (still works!)
 pv_config = PVConfig(plotter=initialize_plotter())
-rams_data = PVRamsData(
+gridded_data = PVGriddedData(
     simulation_ds=sim_ds,
     varspecs=(PVContourSpec(varname='THETA', isosurfaces=[300, 310]),)
 )
@@ -34,7 +34,7 @@ traj_data = PVTrajectoryData(
     trajectory_ds=traj_ds,
     varspecs=(PVTrajectorySpec(scalar='temperature'),)
 )
-meshes = plot_rams_and_trajectories(pv_config, [rams_data, traj_data])
+meshes = plot_gridded_and_trajectories(pv_config, [gridded_data, traj_data])
 
 # New way
 meshes = quick_plot(
@@ -56,7 +56,7 @@ pv_config = PVConfig(
     fps=15
 )
 # ... create data objects ...
-meshes = plot_rams_and_trajectories(pv_config, pv_datas)
+meshes = plot_gridded_and_trajectories(pv_config, pv_datas)
 
 # New way
 meshes = quick_plot(
@@ -142,8 +142,8 @@ quick_plot(
 ```python
 # Use factory functions for most specs, but still use full API for special cases
 from cloudy.pvplotting import (
-    plot_rams_and_trajectories,
-    PVConfig, PVRamsData, PVTrajectoryData,
+    plot_gridded_and_trajectories,
+    PVConfig, PVGriddedData, PVTrajectoryData,
     make_contour, make_trajectory, PVVectorSpec  # Mix factory and dataclass
 )
 
@@ -159,11 +159,11 @@ vector = PVVectorSpec(
     add_mesh_kwargs={'opacity': 0.3}
 )
 
-rams_data = PVRamsData(simulation_ds=sim_ds, varspecs=(theta, vector))
+gridded_data = PVGriddedData(simulation_ds=sim_ds, varspecs=(theta, vector))
 traj_data = PVTrajectoryData(trajectory_ds=traj_ds, varspecs=(traj,))
 config = PVConfig(animation=True, gif_path='out.gif')
 
-meshes = plot_rams_and_trajectories(config, [rams_data, traj_data])
+meshes = plot_gridded_and_trajectories(config, [gridded_data, traj_data])
 ```
 
 ## Tips

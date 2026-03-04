@@ -115,3 +115,6 @@ dmypy.json
 test_outputs/
 figures/
 data/
+
+# Claude
+CLAUDE.md

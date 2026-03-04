@@ -12,7 +12,8 @@ from .plotter import initialize_plotter
 from .core import (
     get_subplot_keys,
     sanitize_inputs,
-    plot_rams_and_trajectories,
+    plot_gridded_and_trajectories,
+    plot_rams_and_trajectories,  # Deprecated alias for backwards compatibility
     plot_trajectory_frame,
     animate_trajectories,
     rectangle_mesh,
@@ -23,7 +24,8 @@ from .core import (
 # Type definitions
 from .types_sv import (
     PVConfig,
-    PVRamsData,
+    PVGriddedData,
+    PVRamsData,  # Deprecated alias for backwards compatibility
     PVTrajectoryData,
     PV2DSpec,
     PVContourSpec,
@@ -61,12 +63,15 @@ from .convenience import (
     make_trajectory,
 )
 
-# Main plotting function alias
-plot_trajectories = plot_rams_and_trajectories
+# Main plotting function aliases
+plot_gridded = plot_gridded_and_trajectories
+plot_trajectories = plot_gridded_and_trajectories
 
 __all__ = [
     # Main functions
-    "plot_rams_and_trajectories",
+    "plot_gridded_and_trajectories",
+    "plot_gridded",
+    "plot_rams_and_trajectories",  # Deprecated
     "plot_trajectories",
     "animate_trajectories",
     # Convenience functions
@@ -86,7 +91,8 @@ __all__ = [
     "add_mesh_to_subplots",
     # Types
     "PVConfig",
-    "PVRamsData",
+    "PVGriddedData",
+    "PVRamsData",  # Deprecated
     "PVTrajectoryData",
     "PV2DSpec",
     "PVContourSpec",

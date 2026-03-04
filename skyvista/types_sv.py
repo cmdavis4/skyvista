@@ -9,9 +9,8 @@ from copy import copy
 
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Tuple, Optional, Union
-from ..types_core import PathLike
 
-from ..utils import to_kv_str, dt_to_str, NUMERICAL_DT_FORMAT
+from skyutils import to_kv_str, dt_to_str, NUMERICAL_DT_FORMAT, PathLike
 
 
 @dataclass
@@ -163,7 +162,7 @@ class PVData(ABC):
 @dataclass
 class PVTrajectoryData(PVData):
     trajectory_ds: xr.Dataset
-    n_parcel_limit: Optional[int] = 1000
+    n_trajectory_limit: Optional[int] = 1000
 
     @property
     def ds(self):
@@ -184,38 +183,57 @@ class PVTrajectoryData(PVData):
             raise ValueError(
                 "`trajectory_ds` was passed with a `time` dimension of length 0"
             )
+
+        # Handle trajectory_ix dimension (with backwards compatibility for parcel_ix)
+        if "trajectory_ix" in self.trajectory_ds.dims:
+            trajectory_dim = "trajectory_ix"
+        elif "parcel_ix" in self.trajectory_ds.dims:
+            trajectory_dim = "parcel_ix"
+            warn(
+                "The 'parcel_ix' dimension is deprecated. Please use 'trajectory_ix'"
+                " instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        else:
+            raise ValueError(
+                "trajectory_ds must have either 'trajectory_ix' or 'parcel_ix'"
+                " dimension"
+            )
+
         self.trajectory_ds = self.trajectory_ds.sortby(
             "time", ascending=True
-        ).transpose("parcel_ix", "time")
+        ).transpose(trajectory_dim, "time")
+
         # Limit and warn if we're supposed to
         # This is so that you don't accidentally try to make it plot tens of thousands
         # of trajectories, which will make it hang or crash, and which I often do
-        if self.n_parcel_limit and (
-            len(self.trajectory_ds["parcel_ix"]) > self.n_parcel_limit
+        if self.n_trajectory_limit and (
+            len(self.trajectory_ds[trajectory_dim]) > self.n_trajectory_limit
         ):
             warn(
-                f"Limiting to {self.n_parcel_limit} trajectories from"
-                f" {len(self.trajectory_ds['parcel_ix'])} total; pass"
-                " trajectory_limit=None to remove this limit"
+                f"Limiting to {self.n_trajectory_limit} trajectories from"
+                f" {len(self.trajectory_ds[trajectory_dim])} total; pass"
+                " n_trajectory_limit=None to remove this limit"
             )
             self.trajectory_ds = self.trajectory_ds.isel(
-                parcel_ix=slice(self.n_parcel_limit)
+                {trajectory_dim: slice(self.n_trajectory_limit)}
             )
 
 
 @dataclass
-class PVRamsData(PVData):
+class PVGriddedData(PVData):
     simulation_ds: xr.Dataset
 
     @property
     def ds(self):
-        """Alias for trajectory_ds attribute."""
+        """Alias for simulation_ds attribute."""
         return self.simulation_ds
 
     def _check_varspec(self, varspec):
         if isinstance(varspec, PVTrajectorySpec):
             raise ValueError(
-                "PVRamsData object does not accept PVTRajectorySpec varspecs"
+                "PVGriddedData object does not accept PVTrajectorySpec varspecs"
             )
 
     def _split_contour_isosurface_varspecs(self):
@@ -280,3 +298,7 @@ class PVMesh:
     @property
     def mesh_empty(self):
         return len(self.mesh.points) == 0
+
+
+# Backwards compatibility alias
+PVRamsData = PVGriddedData
