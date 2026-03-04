@@ -206,7 +206,12 @@ def _create_meshes_for_frame(pv_datas: List[PVData], current_time):
             # =============================================================================
             # RAMS data processing
             # =============================================================================
-            this_time_simulation_ds = pv_data.ds.sel({"time": current_time})
+            # Handle datasets with or without time dimension
+            if current_time is not None and "time" in pv_data.ds.dims:
+                this_time_simulation_ds = pv_data.ds.sel({"time": current_time})
+            else:
+                # No time dimension or no time selection needed
+                this_time_simulation_ds = pv_data.ds
 
             # Separate varspecs by type
             contour_specs = [
@@ -451,11 +456,18 @@ def _create_meshes_for_frame(pv_datas: List[PVData], current_time):
         # Trajectories
         # =============================================================================
         elif isinstance(pv_data, PVTrajectoryData):
-            this_time_trajectory_ds = pv_data.ds.sel(
-                {"time": slice(None, current_time)}
-            )
+            # Handle datasets with or without time dimension
+            if current_time is not None and "time" in pv_data.ds.dims:
+                this_time_trajectory_ds = pv_data.ds.sel(
+                    {"time": slice(None, current_time)}
+                )
+            else:
+                # No time dimension or no time selection needed
+                this_time_trajectory_ds = pv_data.ds
+
             # Don't include these if we have fewer than two time points
-            if len(this_time_trajectory_ds["time"].values) >= 2:
+            # (only check if time dimension exists)
+            if "time" not in this_time_trajectory_ds.dims or len(this_time_trajectory_ds["time"].values) >= 2:
                 # Get trajectory specs
                 trajectory_specs = pv_data.varspecs
 
@@ -754,11 +766,16 @@ def plot_gridded_and_trajectories(
         # STILL IMAGE MODE
         # Use simulation_ds times if available, otherwise parcel_ds times
         time_ds = pv_datas[0].ds
-        last_time = (
-            time_ds["time"].values[-1]
-            if "time" in time_ds.dims
-            else time_ds["time"].values  # I.e. if it's a singleton dimension
-        )
+
+        # Handle datasets with or without time dimension
+        if "time" in time_ds.dims:
+            last_time = time_ds["time"].values[-1]
+        elif "time" in time_ds.coords:
+            # It's a singleton dimension
+            last_time = time_ds["time"].values
+        else:
+            # No time dimension at all - use None
+            last_time = None
 
         # Process single time point
         this_frame_meshes = _process_time_point(
