@@ -48,11 +48,6 @@ from .camera import (
     camera_follow_callback,
 )
 
-# Blender export functions
-from .pv_to_blender import (
-    export_meshes_to_blender,
-)
-
 # Convenience functions for simplified API
 from .convenience import (
     quick_plot,

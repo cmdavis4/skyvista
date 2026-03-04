@@ -1,17 +1,7 @@
-from typing import List
 from tqdm.notebook import tqdm
 from pathlib import Path
-import matplotlib as mpl
 
-from .types_pvplotting import PVContourSpec, PVMesh
-from ..types_core import BlenderObject
-from .core_pvplotting import plot_gridded_and_trajectories
-from ..utils import to_kv_str, to_kv_pairs, dt_to_str
-
-import pyvista as pv
-import numpy as np
-
-import traceback
+from ..types_sv import PVMesh
 
 
 def export_meshes_to_blender(meshes: list[PVMesh], out_dir):

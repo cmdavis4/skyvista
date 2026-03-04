@@ -1,4 +1,4 @@
-from skyutils.types_skyutils import BlenderObject
+from .blender_types import BlenderObject
 from .blender_core import get_object_by_name
 
 import bpy

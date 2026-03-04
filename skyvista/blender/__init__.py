@@ -74,9 +74,9 @@ from .blender_config import (
 )
 
 # Types (re-export for convenience)
-from skyutils.types_skyutils import (
+from skyutils.types_skyutils import PathLike
+from .blender_types import (
     BlenderObject,
     BlenderCollection,
     ConfigDict,
-    PathLike,
 )

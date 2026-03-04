@@ -3,7 +3,7 @@ import datetime as dt
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from skyutils.types_skyutils import PathLike
-from skyutils.types_skyutils import BlenderObject
+from .blender_types import BlenderObject
 from skyutils.utils import HUMAN_DT_FORMAT, dt_to_str, to_kv_str, to_kv_pairs
 from .blender_core import (
     select_object,

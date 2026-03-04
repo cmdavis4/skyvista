@@ -9,7 +9,7 @@ from typing import Optional, Dict, Any, Union, List
 import xarray as xr
 from pathlib import Path
 
-from .types_pvplotting import (
+from .types_sv import (
     PVConfig,
     PVGriddedData,
     PVTrajectoryData,
@@ -19,7 +19,7 @@ from .types_pvplotting import (
     PVVectorSpec,
     PVTrajectorySpec,
 )
-from .core_pvplotting import plot_gridded_and_trajectories
+from .core import plot_gridded_and_trajectories
 from .plotter import initialize_plotter
 
 # ============================================================================

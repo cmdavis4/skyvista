@@ -5,7 +5,7 @@ These tests cover the core functionality of the pvplotting module including
 data classes, utility functions, and basic mesh creation logic.
 """
 
-from cloudy_experimental.pvplotting.types_pvplotting import (
+from .types_sv import (
     PV2DSpec,
     PVConfig,
     PVContourSpec,
@@ -25,7 +25,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 # Import the module components to test
-from cloudy_experimental.pvplotting.core_pvplotting import (
+from .core import (
     sanitize_inputs,
     rectangle_mesh,
     _create_meshes_for_frame,
@@ -86,7 +86,9 @@ class TestDataClasses:
 class TestTrajectoryData:
     """Test PVTrajectoryData functionality."""
 
-    def create_sample_trajectory_ds(self, n_trajectories=10, n_times=5, use_legacy_name=False):
+    def create_sample_trajectory_ds(
+        self, n_trajectories=10, n_times=5, use_legacy_name=False
+    ):
         """Create a sample trajectory dataset for testing."""
         times = np.arange(n_times)
         trajectory_ix = np.arange(n_trajectories)
@@ -135,7 +137,9 @@ class TestTrajectoryData:
 
     def test_trajectory_data_trajectory_limit(self):
         """Test trajectory limiting functionality."""
-        ds = self.create_sample_trajectory_ds(n_trajectories=2000)  # More than default limit
+        ds = self.create_sample_trajectory_ds(
+            n_trajectories=2000
+        )  # More than default limit
 
         # Warning is emitted during initialization
         with pytest.warns(UserWarning, match="Limiting to 100 trajectories"):
@@ -162,7 +166,9 @@ class TestTrajectoryData:
         ds = self.create_sample_trajectory_ds(use_legacy_name=True)
 
         # Should emit deprecation warning
-        with pytest.warns(DeprecationWarning, match="parcel_ix.*deprecated.*trajectory_ix"):
+        with pytest.warns(
+            DeprecationWarning, match="parcel_ix.*deprecated.*trajectory_ix"
+        ):
             traj_data = PVTrajectoryData(trajectory_ds=ds, varspecs=())
 
         # Data should still be usable

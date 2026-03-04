@@ -23,7 +23,8 @@ from .blender_core import (
 )
 from .blender_render import setup_render_settings
 from .blender_import import BPY_IMPORT_FUNCTIONS_BY_FILEPATH_SUFFIX
-from skyutils.types_skyutils import ConfigDict, PathLike
+from skyutils.types_skyutils import PathLike
+from .blender_types import ConfigDict
 from skyutils.utils import raise_if_not_evenly_spaced_, to_kv_pairs
 
 

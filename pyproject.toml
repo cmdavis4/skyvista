@@ -30,8 +30,7 @@ classifiers = [
 dependencies = [
     "pyvista>=0.38",
     "numpy",
-    "xarray",
-    "skimage"
+    "xarray"
 ]
 
 [project.optional-dependencies]

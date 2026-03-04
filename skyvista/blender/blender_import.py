@@ -1,7 +1,7 @@
 import csv
 import datetime as dt
 from typing import Any, Dict, List, Tuple
-from skyutils.types_skyutils import BlenderObject
+from .blender_types import BlenderObject
 from pathlib import Path
 
 from .blender_core import (

@@ -1,4 +1,4 @@
-from skyutils.types_skyutils import ConfigDict
+from .blender_types import ConfigDict
 
 DEFAULT_BLENDER_CONFIG: ConfigDict = {
     "frames_per_timestep": 12,

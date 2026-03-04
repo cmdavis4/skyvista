@@ -26,7 +26,8 @@ import bpy
 import bmesh
 
 
-from skyutils.types_skyutils import BlenderObject, PathLike
+from skyutils.types_skyutils import PathLike
+from .blender_types import BlenderObject
 
 # Ignore some errors in this file
 # pyright: reportReturnType=false
