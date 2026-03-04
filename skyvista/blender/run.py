@@ -18,7 +18,8 @@ from .core import (
 )
 from .render import setup_render_settings
 from .import_ import BPY_IMPORT_FUNCTIONS_BY_FILEPATH_SUFFIX
-from ..types_ import ConfigDict, PathLike
+from .blender_types import ConfigDict
+from skyutils.types_skyutils import PathLike
 from skyutils.utils import raise_if_not_evenly_spaced_, to_kv_pairs
 
 
