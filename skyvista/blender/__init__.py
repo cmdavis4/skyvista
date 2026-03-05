@@ -33,7 +33,7 @@ from .blender_core import (
 )
 
 # Utility functions
-from skyutils.utils import (
+from carlee_tools.utils import (
     recursive_reload,
 )
 
@@ -74,7 +74,7 @@ from .blender_config import (
 )
 
 # Types (re-export for convenience)
-from skyutils.types_skyutils import PathLike
+from carlee_tools.types_carlee_tools import PathLike
 from .blender_types import (
     BlenderObject,
     BlenderCollection,

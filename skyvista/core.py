@@ -61,7 +61,7 @@ import ipywidgets as widgets
 import xarray as xr
 import numpy as np
 
-from skyutils import TwoWayDict, to_t_minutes
+from carlee_tools import TwoWayDict, to_t_minutes
 
 # Allow empty meshes globally, since the individual varspecs handle whether to actually
 # include them
@@ -108,7 +108,6 @@ def add_mesh_to_subplots(
         }
 
     # Add mesh to each specified subplot
-    print(pv_mesh)
     for subplot_key in subplot_keys_to_add:
         pv_config.plotter.subplot(*subplot_key)
         # Get the right function, which is plotter.add_mesh for all except volumes
@@ -467,7 +466,10 @@ def _create_meshes_for_frame(pv_datas: List[PVData], current_time):
 
             # Don't include these if we have fewer than two time points
             # (only check if time dimension exists)
-            if "time" not in this_time_trajectory_ds.dims or len(this_time_trajectory_ds["time"].values) >= 2:
+            if (
+                "time" not in this_time_trajectory_ds.dims
+                or len(this_time_trajectory_ds["time"].values) >= 2
+            ):
                 # Get trajectory specs
                 trajectory_specs = pv_data.varspecs
 
@@ -713,6 +715,9 @@ def plot_gridded_and_trajectories(
 
             # Show plotter on first frame (required for trajectory-only animations)
             if frame_idx == 0 and pv_config.show and not pv_config.interactive:
+                # Add grid with correct bounds after meshes are added
+                if pv_config.show_grid:
+                    pv_config.plotter.show_grid()
                 pv_config.plotter.show(auto_close=False)
 
             # Export HTML for individual frames if requested
@@ -752,6 +757,10 @@ def plot_gridded_and_trajectories(
             # Add meshes from first time
             _add_meshes_to_plotter(pv_config=pv_config, meshes=meshes[time_values[0]])
 
+            # Add grid with correct bounds after meshes are added
+            if pv_config.show_grid:
+                pv_config.plotter.show_grid()
+
             # Set up slider
             _create_interactive_time_slider(
                 pv_config=pv_config,
@@ -783,6 +792,10 @@ def plot_gridded_and_trajectories(
             pv_datas=pv_datas,
             current_time=last_time,
         )
+
+        # Add grid with correct bounds after meshes are added
+        if pv_config.show_grid:
+            pv_config.plotter.show_grid()
 
         # Display plot
         if pv_config.show:

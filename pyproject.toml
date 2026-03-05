@@ -30,12 +30,12 @@ classifiers = [
 dependencies = [
     "pyvista>=0.38",
     "numpy",
-    "xarray"
+    "xarray",
+    "carlee-tools>=1.1.0"
 ]
 
 [project.optional-dependencies]
 blender = [
-    "skyutils>=1.0.0",
     "pandas",
     # Note: bpy (Blender as Python module) must be installed separately
     # It's not available via pip/conda and requires Blender installation
@@ -51,7 +51,6 @@ dev = [
     "mypy",
 ]
 all = [
-    "skyutils>=1.0.0",
     "pandas",
     "pyopenvdb",
 ]

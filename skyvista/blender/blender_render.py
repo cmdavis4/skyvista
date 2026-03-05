@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Tuple
 import bpy
-from skyutils.types_skyutils import PathLike
+from carlee_tools.types_carlee_tools import PathLike
 
 
 def setup_render_settings(

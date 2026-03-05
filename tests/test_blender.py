@@ -40,6 +40,6 @@ def test_blender_functions_importable(mock_bpy):
 def test_blender_types_importable(mock_bpy):
     """Test that Blender types are re-exported from blender subpackage."""
     from skyvista.blender import BlenderObject, BlenderCollection
-    # These should be importable (they're from skyutils.types_skyutils)
+    # These should be importable (they're from carlee_tools.types_carlee_tools)
     assert BlenderObject is not None
     assert BlenderCollection is not None

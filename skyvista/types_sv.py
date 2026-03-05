@@ -10,7 +10,7 @@ from copy import copy
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Tuple, Optional, Union
 
-from skyutils import to_kv_str, dt_to_str, NUMERICAL_DT_FORMAT, PathLike
+from carlee_tools import to_kv_str, dt_to_str, NUMERICAL_DT_FORMAT, PathLike
 
 
 @dataclass
@@ -28,6 +28,7 @@ class PVConfig:
     export_html: bool = False
     fps: Optional[float] = 10.0
     show: bool = True
+    show_grid: bool = False
     callback: Optional[
         Callable[
             [

@@ -289,6 +289,7 @@ def quick_plot(
     gif_scrubber: bool = False,
     # Display settings
     show: bool = True,
+    show_grid: bool = True,
     screenshot_path: Optional[str] = None,
     export_html: bool = False,
     title: Optional[str] = None,
@@ -333,6 +334,7 @@ def quick_plot(
         interactive: Use interactive slider instead of saving GIF
         gif_scrubber: Use gif scrubber widget for animations
         show: Display the plot
+        show_grid: Show coordinate grid (with correct bounds based on data)
         screenshot_path: Path to save screenshot
         export_html: Export HTML alongside screenshot/animation
         title: Custom title text for the plot
@@ -504,6 +506,7 @@ def quick_plot(
         export_html=export_html,
         fps=fps,
         show=show,
+        show_grid=show_grid,
         title=title,
         **config_kwargs,
     )

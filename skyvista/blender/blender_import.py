@@ -7,8 +7,8 @@ from pathlib import Path
 from .blender_core import (
     uvw_to_magnitude_and_rotation,
 )
-from skyutils.utils import dt_to_str, to_kv_pairs
-from skyutils.types_skyutils import PathLike
+from carlee_tools.utils import dt_to_str, to_kv_pairs
+from carlee_tools.types_carlee_tools import PathLike
 from .blender_core import DATA_FILE_SUFFIXES, resize_object
 
 import bpy
