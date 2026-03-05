@@ -5,22 +5,23 @@ This module provides high-level wrapper functions that hide the complexity
 of the dataclass-based API for common visualization tasks.
 """
 
-from typing import Optional, Dict, Any, Union, List
-import xarray as xr
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
-from .types_sv import (
-    PVConfig,
-    PVGriddedData,
-    PVTrajectoryData,
-    PVContourSpec,
-    PVVolumeSpec,
-    PV2DSpec,
-    PVVectorSpec,
-    PVTrajectorySpec,
-)
+import xarray as xr
+
 from .core import plot_gridded_and_trajectories
 from .plotter import initialize_plotter
+from .types_sv import (
+    PV2DSpec,
+    PVConfig,
+    PVContourSpec,
+    PVGriddedData,
+    PVTrajectoryData,
+    PVTrajectorySpec,
+    PVVectorSpec,
+    PVVolumeSpec,
+)
 
 # ============================================================================
 # FACTORY FUNCTIONS FOR SPECS

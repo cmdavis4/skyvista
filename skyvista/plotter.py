@@ -1,6 +1,6 @@
-import pyvista as pv
-
 from typing import Any
+
+import pyvista as pv
 
 
 def initialize_plotter(

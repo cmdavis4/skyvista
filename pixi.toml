@@ -5,23 +5,6 @@ description = "PyVista-based 3D visualization for atmospheric data"
 channels = ["conda-forge"]
 platforms = ["linux-64", "osx-64", "osx-arm64"]
 
-[dependencies]
-# Core required dependencies
-python = ">=3.8"
-pyvista = ">=0.38"
-numpy = "*"
-xarray = "*"
-pip = "*"
-
-[feature.blender.dependencies]
-# Blender integration dependencies
-# Note: bpy (Blender as Python module) must be installed separately
-pandas = "*"
-
-[feature.vdb.dependencies]
-# VDB volume rendering support
-pyopenvdb = "*"
-
 [feature.test.dependencies]
 # Testing tools
 pytest = ">=7.0"
@@ -35,12 +18,13 @@ mypy = "*"
 ipython = "*"
 jupyter = "*"
 
+[feature.minimal.pypi-dependencies]
+build = "*"
+twine = ">=6.2.0, <7"
+
 [environments]
 # Minimal environment - core functionality
-minimal = {features = ["test"], solve-group = "minimal"}
-
-# Blender environment - includes blender integration
-blender = {features = ["blender", "vdb", "test"], solve-group = "blender"}
+minimal = {features = ["test", "minimal"], solve-group = "minimal"}
 
 # Development environment - includes everything
 dev = {features = ["test", "dev"], solve-group = "dev"}
@@ -69,3 +53,14 @@ check = {depends-on = ["format", "lint", "typecheck"]}
 
 # Clean up build artifacts and caches
 clean = "rm -rf build/ dist/ *.egg-info .pytest_cache/ .coverage .mypy_cache/ __pycache__/ skyvista/__pycache__/ tests/__pycache__/ htmlcov/"
+
+[pypi-dependencies]
+skyvista = "*"
+
+[dependencies]
+pip = ">=26.0.1,<27"
+ipykernel = ">=7.2.0,<8"
+jupyter = ">=1.1.1,<2"
+jupyterlab = ">=4.5.5,<5"
+ipywidgets = ">=8.1.8,<9"
+h5netcdf = ">=1.8.1,<2"

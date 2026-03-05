@@ -31,37 +31,35 @@ Example Usage:
 """
 
 # Set PyVista to off-screen mode before importing to avoid kernel crashes on interrupt
+from copy import copy
 from itertools import product
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple, overload
+
+import ipywidgets as widgets
+import matplotlib.pyplot as plt
+import numpy as np
+import pyvista as pv
+import xarray as xr
+from IPython.display import HTML, Image, display  # type: ignore
+from tqdm.notebook import tqdm  # type: ignore
+
+from carlee_tools import TwoWayDict, to_t_minutes
 
 from .plotter import initialize_plotter
-
+from .trajectories import generate_trajectory_mesh
 from .types_sv import (
     PV2DSpec,
     PVConfig,
     PVContourSpec,
-    PVMesh,
     PVData,
+    PVMesh,
     PVRamsData,
     PVTrajectoryData,
     PVTrajectorySpec,
-    PVVolumeSpec,
     PVVectorSpec,
+    PVVolumeSpec,
 )
-from .trajectories import generate_trajectory_mesh
-import pyvista as pv
-import numpy as np
-import matplotlib.pyplot as plt
-from tqdm.notebook import tqdm  # type: ignore
-from IPython.display import HTML, display, Image  # type: ignore
-from pathlib import Path
-from typing import Iterator, Tuple, overload, Optional, Dict, Any, List
-from copy import copy
-import ipywidgets as widgets
-
-import xarray as xr
-import numpy as np
-
-from carlee_tools import TwoWayDict, to_t_minutes
 
 # Allow empty meshes globally, since the individual varspecs handle whether to actually
 # include them

@@ -2,13 +2,15 @@
 # TRAJECTORY MESH GENERATION
 # ============================================================================
 
-import numpy as np
-from .types_sv import PVTrajectoryData, PVTrajectorySpec, PVMesh
-import pyvista as pv
-import xarray as xr
 from typing import Any, Dict, List, Optional, Union
 
+import numpy as np
+import pyvista as pv
+import xarray as xr
+
 from carlee_tools import maybe_cast_to_float, to_kv_str
+
+from .types_sv import PVMesh, PVTrajectoryData, PVTrajectorySpec
 
 
 def create_trajectory_polydata(
