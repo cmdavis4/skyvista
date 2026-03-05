@@ -22,7 +22,7 @@ Skyvista also contains functionality for exporting meshes and volumes created wi
 First install Skyvista, which will install pyvista as a dependency:
 
 ```bash
-pip install git@github.com:cmdavis4/skyvista.git
+pip install skyvista
 ```
 From here, pyvista configuration may be complicated depending on your setup. We recommend following the [pyvista installation documentation](https://docs.pyvista.org/getting-started/installation.html) and ensuring that you can successfully create an interactive bunny visualization, following the documentation's example:
 ```
