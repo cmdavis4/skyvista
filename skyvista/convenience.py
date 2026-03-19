@@ -23,6 +23,8 @@ from .types_sv import (
     PVVolumeSpec,
 )
 
+SCALAR_BAR_DEFAULT = True
+
 # ============================================================================
 # FACTORY FUNCTIONS FOR SPECS
 # ============================================================================
@@ -34,7 +36,7 @@ def make_contour(
     opacity: Optional[float] = None,
     color: Optional[str] = None,
     individual_meshes: bool = False,
-    scalar_bar: bool = False,
+    scalar_bar: bool = SCALAR_BAR_DEFAULT,
     **kwargs,
 ) -> PVContourSpec:
     """
@@ -90,7 +92,7 @@ def make_volume(
     opacity: Optional[Union[str, float, List[float]]] = None,
     clim: Optional[Tuple[float, float]] = None,
     cmap: Optional[str] = None,
-    scalar_bar: bool = False,
+    scalar_bar: bool = SCALAR_BAR_DEFAULT,
     opacity_unit_distance: Optional[float] = None,
     **kwargs,
 ) -> PVVolumeSpec:
@@ -226,7 +228,7 @@ def make_trajectory(
     color: Optional[str] = None,
     scalar: Optional[str] = None,
     cmap: str = "viridis",
-    scalar_bar: bool = False,
+    scalar_bar: bool = SCALAR_BAR_DEFAULT,
     particles: bool = False,
     silhouettes: bool = False,
     opacity: Optional[float] = None,
@@ -421,13 +423,12 @@ def quick_plot(
     if simulation_ds is not None and trajectory_ds is None:
         if not any([contours, volumes, vectors, slices_2d]):
             raise ValueError(
-                "When providing simulation_ds without trajectory_ds, you must specify "
-                "at least one visualization type: contours, volumes, vectors, or slices_2d.\n"
-                "Examples:\n"
-                "  contours={'THETA': [300, 310]}\n"
-                "  volumes={'WC': {}}\n"
-                "  vectors={'wind': {'u': 'UC', 'v': 'VC', 'w': 'WC', 'factor': 0.001}}\n"
-                "  slices_2d={'DBZ': {'slice_dim': 'z', 'slice_value': 1000}}"
+                "When providing simulation_ds without trajectory_ds, you must specify"
+                " at least one visualization type: contours, volumes, vectors, or"
+                " slices_2d.\nExamples:\n  contours={'THETA': [300, 310]}\n "
+                " volumes={'WC': {}}\n  vectors={'wind': {'u': 'UC', 'v': 'VC', 'w':"
+                " 'WC', 'factor': 0.001}}\n  slices_2d={'DBZ': {'slice_dim': 'z',"
+                " 'slice_value': 1000}}"
             )
 
     if animate and not interactive and not gif_path:

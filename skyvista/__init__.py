@@ -58,6 +58,10 @@ from .convenience import (
     make_trajectory,
 )
 
+from .examples import load_example_storm_data
+
+from . import presets
+
 # Main plotting function aliases
 plot_gridded = plot_gridded_and_trajectories
 plot_trajectories = plot_gridded_and_trajectories

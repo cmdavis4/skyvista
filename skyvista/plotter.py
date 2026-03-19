@@ -7,6 +7,7 @@ def initialize_plotter(
     background: str = "#f8f6f1",
     add_axes: bool = True,
     show_grid: bool = False,
+    scale: dict = {"zscale": 3},
     **kwargs: Any,
 ) -> pv.Plotter:
     """
@@ -47,7 +48,7 @@ def initialize_plotter(
             if add_axes:
                 p.add_axes(viewport=(0.0, 0.0, 0.3, 0.3))
             # Exaggerate z scale for atmospheric data (typical aspect ratio)
-            p.set_scale(zscale=3)
+            p.set_scale(**scale)
             # Note: show_grid parameter is deprecated - don't call it here
             # Grid should be shown after meshes are added for correct bounds
             # Use PVConfig.show_grid instead or call plotter.show_grid() manually
