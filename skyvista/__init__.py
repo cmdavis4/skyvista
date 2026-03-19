@@ -87,6 +87,19 @@ from .plotter import initialize_plotter
 from .examples import load_example_storm_data
 from . import presets
 
+# Grid builders and coordinate utilities
+from .grids import (
+    COORD_ALIASES,
+    GridBuilder,
+    RectilinearGridBuilder,
+    CurvilinearGridBuilder,
+    UnstructuredGridBuilder,
+    detect_grid_type,
+    get_grid_builder,
+    resolve_coordinate,
+    resolve_coordinates,
+)
+
 # =============================================================================
 # DEPRECATED API (kept for backwards compatibility)
 # =============================================================================
@@ -188,6 +201,16 @@ __all__ = [
     "initialize_plotter",
     "load_example_storm_data",
     "presets",
+    # Grid builders
+    "COORD_ALIASES",
+    "GridBuilder",
+    "RectilinearGridBuilder",
+    "CurvilinearGridBuilder",
+    "UnstructuredGridBuilder",
+    "detect_grid_type",
+    "get_grid_builder",
+    "resolve_coordinate",
+    "resolve_coordinates",
     # Deprecated (backwards compatibility)
     "quick_plot",
     "plot_trajectories_only",

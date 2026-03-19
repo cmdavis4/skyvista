@@ -115,6 +115,8 @@ test_outputs/
 figures/
 data/
 
+*scratch*
+
 # Claude
 CLAUDE.md
 pyrightconfig.json

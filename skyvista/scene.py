@@ -8,13 +8,14 @@ renders them to various targets (PyVista, Blender, HTML).
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import pyvista as pv
 import xarray as xr
 
 from carlee_tools import PathLike
 
+from .grids import get_grid_builder, merge_bounds_meshes
 from .varspec import (
     ContourSpec,
     SliceSpec,
@@ -39,6 +40,7 @@ class Scene:
         background: Background color (hex or name)
         title: Title text to display
         show_grid: Whether to show coordinate grid
+        force_bounds: Force scene bounds to match data domain
 
     Example:
         >>> scene = Scene()
@@ -54,9 +56,13 @@ class Scene:
     background: str = "#f8f6f1"
     title: Optional[str] = None
     show_grid: bool = True
+    force_bounds: bool = False
 
     # Accumulated specs: list of (dataset, varspec) tuples
     _specs: List[Tuple[xr.Dataset, VarSpec]] = field(default_factory=list)
+
+    # Cached bounds meshes keyed by dataset id
+    _bounds_meshes: Dict[int, pv.PolyData] = field(default_factory=dict, repr=False)
 
     # Cached plotter for interactive use
     _plotter: Optional[pv.Plotter] = field(default=None, repr=False)
@@ -93,6 +99,19 @@ class Scene:
             self (for method chaining)
         """
         self._specs.append((ds, spec))
+
+        # Track bounds mesh for this dataset if force_bounds is enabled
+        # Use dataset id to avoid duplicating bounds for same dataset
+        if self.force_bounds:
+            ds_id = id(ds)
+            if ds_id not in self._bounds_meshes:
+                try:
+                    builder = get_grid_builder(ds)
+                    self._bounds_meshes[ds_id] = builder.create_bounds_mesh(ds)
+                except ValueError:
+                    # Coordinate resolution failed - skip bounds for this dataset
+                    pass
+
         return self
 
     def add_contour(
@@ -394,6 +413,34 @@ class Scene:
         return times[-1] if times and times[0] is not None else None
 
     # -------------------------------------------------------------------------
+    # Bounds handling
+    # -------------------------------------------------------------------------
+
+    def _get_merged_bounds(self) -> Optional[pv.PolyData]:
+        """Get merged bounds mesh from all datasets."""
+        if not self._bounds_meshes:
+            return None
+
+        meshes = list(self._bounds_meshes.values())
+        return merge_bounds_meshes(meshes)
+
+    def _add_bounds_to_plotter(self, plotter: pv.Plotter) -> None:
+        """Add bounds mesh to plotter if force_bounds is enabled."""
+        if not self.force_bounds:
+            return
+
+        bounds_mesh = self._get_merged_bounds()
+        if bounds_mesh is not None:
+            # Add as very transparent wireframe so it forces bounds without being visible
+            plotter.add_mesh(
+                bounds_mesh,
+                name="_bounds",
+                color="gray",
+                opacity=0.05,
+                line_width=0.5,
+            )
+
+    # -------------------------------------------------------------------------
     # Rendering (PyVista)
     # -------------------------------------------------------------------------
 
@@ -449,6 +496,7 @@ class Scene:
         # Use cached plotter if already created, otherwise build new one
         plotter = self.plotter
         self._render_frame(plotter, time or self._get_last_time())
+        self._add_bounds_to_plotter(plotter)
 
         if self.show_grid:
             plotter.show_grid()
@@ -477,6 +525,7 @@ class Scene:
         """
         plotter = self._build_plotter()
         self._render_frame(plotter, time or self._get_last_time())
+        self._add_bounds_to_plotter(plotter)
 
         if self.show_grid:
             plotter.show_grid()
@@ -513,6 +562,9 @@ class Scene:
         if self.show_grid:
             plotter.show_grid()
 
+        # Add bounds once at the beginning (static throughout animation)
+        self._add_bounds_to_plotter(plotter)
+
         plotter.open_gif(str(path), fps=fps)
 
         for i, t in enumerate(tqdm(times, desc="Rendering frames")):
@@ -546,6 +598,9 @@ class Scene:
         meshes_by_time: Dict[Any, List[PVMesh]] = {}
         for t in tqdm(times, desc="Pre-rendering frames"):
             meshes_by_time[t] = self._render_frame(plotter, t)
+
+        # Add bounds once (static)
+        self._add_bounds_to_plotter(plotter)
 
         if self.show_grid:
             plotter.show_grid()
@@ -590,6 +645,7 @@ class Scene:
         """
         plotter = self._build_plotter()
         self._render_frame(plotter, time or self._get_last_time())
+        self._add_bounds_to_plotter(plotter)
 
         if self.show_grid:
             plotter.show_grid()

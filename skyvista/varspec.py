@@ -35,7 +35,13 @@ from .geometry import (
     VectorGeometry,
     VolumeGeometry,
 )
-from .grid_utils import add_scalar_to_grid, build_rectilinear_grid, select_time
+from .grid_utils import (
+    add_scalar_to_grid,
+    build_grid,
+    build_rectilinear_grid,
+    select_time,
+)
+from .grids import get_grid_builder
 
 if TYPE_CHECKING:
     from .types_sv import PVMesh
@@ -52,12 +58,15 @@ class VarSpec(ABC):
     Attributes:
         name: Unique identifier for this spec (auto-generated if None)
         empty_ok: If True, don't skip this spec when mesh is empty
+        grid_type: Explicit grid type ("rectilinear", "curvilinear", "unstructured")
+                   or None for auto-detection
         pyvista_create_kwargs: Escape hatch for PyVista mesh creation kwargs
         pyvista_add_kwargs: Escape hatch for PyVista add_mesh kwargs
     """
 
     name: Optional[str] = None
     empty_ok: bool = False
+    grid_type: Optional[str] = None
 
     # Escape hatches for edge cases
     pyvista_create_kwargs: Dict[str, Any] = field(default_factory=dict)
@@ -187,12 +196,9 @@ class ContourSpec(VarSpec):
     def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
         ds = select_time(ds, time)
 
-        # Build rectilinear grid
-        grid = build_rectilinear_grid(ds)
-
-        # Add scalar data
+        # Build grid (auto-detects type or uses explicit grid_type)
         varname = self._geometry.varname
-        add_scalar_to_grid(grid, ds, varname)
+        grid = build_grid(ds, varname=varname, grid_type=self.grid_type)
 
         # Create contour
         contour_kwargs = {"scalars": varname}
@@ -242,12 +248,9 @@ class VolumeSpec(VarSpec):
     def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
         ds = select_time(ds, time)
 
-        # Build rectilinear grid
-        grid = build_rectilinear_grid(ds)
-
-        # Add scalar data
+        # Build grid (auto-detects type or uses explicit grid_type)
         varname = self._geometry.varname
-        add_scalar_to_grid(grid, ds, varname)
+        grid = build_grid(ds, varname=varname, grid_type=self.grid_type)
 
         # Apply threshold if specified
         if self._geometry.threshold:
@@ -299,10 +302,12 @@ class VectorSpec(VarSpec):
     def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
         from carlee_tools import spacing
 
+        from .grids import resolve_coordinates
+
         ds = select_time(ds, time)
 
-        # Build rectilinear grid
-        grid = build_rectilinear_grid(ds)
+        # Build grid (auto-detects type or uses explicit grid_type)
+        grid = build_grid(ds, grid_type=self.grid_type)
 
         # Stack vector components
         u = ds[self._geometry.u_varname].values.ravel(order="F")
@@ -325,7 +330,9 @@ class VectorSpec(VarSpec):
         # Auto-calculate factor if not provided
         factor = self._geometry.factor
         if factor is None:
-            component_to_dim = {"u": "x", "v": "y", "w": "z"}
+            # Use resolved coordinate names
+            coords = resolve_coordinates(ds, ["x", "y", "z"])
+            component_to_dim = {"u": coords["x"], "v": coords["y"], "w": coords["z"]}
             ratios = []
             for component, dim in component_to_dim.items():
                 if dim in ds.coords and len(ds[dim]) > 1:
@@ -383,42 +390,52 @@ class SliceSpec(VarSpec):
             self.name = f"slice_{self._geometry.varname}_{self._geometry.slice_dim}"
 
     def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
+        from .grids import resolve_coordinates
+
         ds = select_time(ds, time)
+
+        # Resolve coordinate names
+        coord_names = resolve_coordinates(ds, ["x", "y", "z"])
 
         # Get slice parameters
         slice_dim = self._geometry.slice_dim
         slice_value = self._geometry.slice_value
         slice_method = self._geometry.slice_method
 
+        # Map slice_dim to actual coordinate name if needed
+        slice_coord = coord_names.get(slice_dim, slice_dim)
+
         # Select the slice from the data
         if slice_value is None:
-            slice_sel = {slice_dim: ds[slice_dim].values[0]}
+            slice_sel = {slice_coord: ds[slice_coord].values[0]}
         else:
-            slice_sel = {slice_dim: slice_value}
+            slice_sel = {slice_coord: slice_value}
 
         sliced_data = ds.sel(slice_sel, method=slice_method)
 
         # Determine remaining dimensions
         remaining_dims = [d for d in ["x", "y", "z"] if d != slice_dim]
         dim1, dim2 = remaining_dims
+        coord1_name = coord_names[dim1]
+        coord2_name = coord_names[dim2]
 
         # Create meshgrid
-        coord1 = sliced_data[dim1].values
-        coord2 = sliced_data[dim2].values
+        coord1 = sliced_data[coord1_name].values
+        coord2 = sliced_data[coord2_name].values
         grid1, grid2 = np.meshgrid(coord1, coord2, indexing="ij")
 
         # Create constant coordinate for sliced dimension
         if slice_value is None:
-            slice_coord_value = sliced_data[slice_dim].values.item()
+            slice_coord_value = sliced_data[slice_coord].values.item()
         else:
             slice_coord_value = slice_value
         grid_sliced = np.ones_like(grid1) * slice_coord_value
 
-        # Map coordinates to x, y, z
-        coords = {slice_dim: grid_sliced, dim1: grid1, dim2: grid2}
+        # Map coordinates to x, y, z positions for StructuredGrid
+        grids = {slice_dim: grid_sliced, dim1: grid1, dim2: grid2}
 
         create_kwargs = dict(self.pyvista_create_kwargs)
-        mesh = pv.StructuredGrid(coords["x"], coords["y"], coords["z"], **create_kwargs)
+        mesh = pv.StructuredGrid(grids["x"], grids["y"], grids["z"], **create_kwargs)
 
         # Add variable data
         varname = self._geometry.varname
