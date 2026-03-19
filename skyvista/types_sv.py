@@ -20,7 +20,6 @@ class PVConfig:
     plotter: pv.Plotter = field(default_factory=initialize_plotter)
     animation: bool = False
     gif_path: Optional[PathLike] = None
-    gif_scrubber: bool = False
     screenshot_path: Optional[PathLike] = None
     subplot_included_meshes: dict = field(default_factory=dict)
     title: Optional[str] = None

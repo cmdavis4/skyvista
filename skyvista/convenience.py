@@ -6,7 +6,7 @@ of the dataclass-based API for common visualization tasks.
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import xarray as xr
 
@@ -87,36 +87,58 @@ def make_contour(
 
 def make_volume(
     varname: str,
-    opacity: Optional[float] = None,
+    opacity: Optional[Union[str, float, List[float]]] = None,
+    clim: Optional[Tuple[float, float]] = None,
+    cmap: Optional[str] = None,
     scalar_bar: bool = False,
+    opacity_unit_distance: Optional[float] = None,
     **kwargs,
 ) -> PVVolumeSpec:
     """
-    Create a contour specification with simplified arguments.
+    Create a volume rendering specification.
 
     Args:
-        varname: Variable name for contouring
-        isosurfaces: Isosurface values (single value or list)
-        opacity: Mesh opacity (0-1)
-        color: Mesh color name
-        individual_meshes: Create separate mesh for each isosurface
+        varname: Variable name for volume rendering
+        opacity: Opacity transfer function. Can be:
+            - A string: "linear", "linear_r", "sigmoid", "sigmoid_r", "geom", "geom_r"
+            - A float (0-1): uniform opacity for all values
+            - A list of floats: custom opacity transfer function
+            Default is [0, 0, 0.2, 0.6, 1.0] which makes low values transparent
+            and ramps up for higher values - good for scientific visualization.
+        clim: Color limits as (min, max) tuple. Values outside this range are clamped.
+        cmap: Colormap name (e.g., 'viridis', 'coolwarm')
         scalar_bar: Show scalar bar
-        **kwargs: Additional arguments for create_mesh_kwargs or add_mesh_kwargs
+        opacity_unit_distance: Controls how quickly opacity accumulates through the
+            volume. By default, this is automatically calculated from grid spacing.
+            Smaller values = more opaque; larger values = more transparent.
+        **kwargs: Additional arguments passed to pyvista's add_volume
 
     Returns:
-        PVContourSpec instance
+        PVVolumeSpec instance
 
     Example:
-        >>> spec = make_contour('THETA', isosurfaces=[300, 310], opacity=0.5)
+        >>> spec = make_volume('WC', clim=(1, 10))
+        >>> spec = make_volume('WC', clim=(0, 5), opacity=[0, 0, 0.2, 0.5, 1.0])
+        >>> spec = make_volume('WC', opacity='sigmoid')  # use built-in sigmoid
     """
-
-    # Separate kwargs into create_mesh and add_mesh kwargs
     add_mesh_kwargs = {}
-    if opacity is not None:
-        add_mesh_kwargs["opacity"] = opacity
 
-    # Any remaining kwargs go to add_mesh_kwargs by default
-    # Users can override with create_mesh_kwargs_ prefix
+    # Default opacity transfer function: low values transparent, ramps up for high
+    # This works better for scientific data than "linear" or "sigmoid"
+    if opacity is None:
+        opacity = [0, 0, 0.2, 0.6, 1.0]
+    add_mesh_kwargs["opacity"] = opacity
+
+    if clim is not None:
+        add_mesh_kwargs["clim"] = clim
+
+    if cmap is not None:
+        add_mesh_kwargs["cmap"] = cmap
+
+    if opacity_unit_distance is not None:
+        add_mesh_kwargs["opacity_unit_distance"] = opacity_unit_distance
+
+    # Any remaining kwargs go to add_mesh_kwargs
     create_mesh_kwargs = {}
     for key, value in kwargs.items():
         if key.startswith("create_mesh_"):
@@ -138,6 +160,8 @@ def make_vector(
     v_varname: str = "VC",
     w_varname: str = "WC",
     scale: Optional[str] = None,
+    factor: Optional[float] = None,
+    tolerance: Optional[float] = None,
     opacity: Optional[float] = None,
     color: Optional[str] = None,
     **kwargs,
@@ -151,6 +175,10 @@ def make_vector(
         v_varname: Variable name for v component
         w_varname: Variable name for w component
         scale: Variable name or value for arrow scaling
+        factor: Scale factor for glyph size (passed to pyvista's glyph method)
+        tolerance: Tolerance for merging points in glyph creation. Specify a value
+            between 0 and 1 to merge points that are a fraction of the bounding
+            box diagonal apart. Set to 0 to disable merging (keeps all points).
         opacity: Mesh opacity (0-1)
         color: Arrow color name
         **kwargs: Additional arguments for glyph creation
@@ -159,7 +187,8 @@ def make_vector(
         PVVectorSpec instance
 
     Example:
-        >>> spec = make_vector('wind', scale='speed', opacity=0.7)
+        >>> spec = make_vector('wind', scale='speed', factor=0.001, opacity=0.7)
+        >>> spec = make_vector('wind', tolerance=0)  # disable point merging
     """
     add_mesh_kwargs = {}
     if opacity is not None:
@@ -170,6 +199,10 @@ def make_vector(
     create_mesh_kwargs = {}
     if scale is not None:
         create_mesh_kwargs["scale"] = scale
+    if factor is not None:
+        create_mesh_kwargs["factor"] = factor
+    if tolerance is not None:
+        create_mesh_kwargs["tolerance"] = tolerance
 
     # Add any extra kwargs
     for key, value in kwargs.items():
@@ -287,7 +320,6 @@ def quick_plot(
     gif_path: Optional[str] = None,
     fps: float = 10,
     interactive: bool = False,
-    gif_scrubber: bool = False,
     # Display settings
     show: bool = True,
     show_grid: bool = True,
@@ -315,7 +347,7 @@ def quick_plot(
             Simple form: {'THETA': [300, 310]}
             Full form: {'THETA': {'isosurfaces': [300, 310], 'opacity': 0.5, ...}}
         vectors: Dictionary mapping names to vector field specifications.
-            Example: {'wind': {'u': 'UC', 'v': 'VC', 'w': 'WC', 'scale': 'speed'}}
+            Example: {'wind': {'u': 'UC', 'v': 'VC', 'w': 'WC', 'factor': 0.001}}
         slices_2d: Dictionary for 2D slice specifications.
             Example: {'DBZ': {'slice_dim': 'x', 'slice_value': -50000, 'opacity': 0.8}}
             Supported keys:
@@ -333,7 +365,6 @@ def quick_plot(
         gif_path: Output path for animation (required if animate=True and not interactive)
         fps: Frames per second for animation
         interactive: Use interactive slider instead of saving GIF
-        gif_scrubber: Use gif scrubber widget for animations
         show: Display the plot
         show_grid: Show coordinate grid (with correct bounds based on data)
         screenshot_path: Path to save screenshot
@@ -383,8 +414,21 @@ def quick_plot(
         ... )
     """
     # Validate inputs
-    if not simulation_ds and not trajectory_ds:
+    if simulation_ds is None and trajectory_ds is None:
         raise ValueError("Must provide at least one of simulation_ds or trajectory_ds")
+
+    # Check that if simulation_ds is provided, at least one visualization type is specified
+    if simulation_ds is not None and trajectory_ds is None:
+        if not any([contours, volumes, vectors, slices_2d]):
+            raise ValueError(
+                "When providing simulation_ds without trajectory_ds, you must specify "
+                "at least one visualization type: contours, volumes, vectors, or slices_2d.\n"
+                "Examples:\n"
+                "  contours={'THETA': [300, 310]}\n"
+                "  volumes={'WC': {}}\n"
+                "  vectors={'wind': {'u': 'UC', 'v': 'VC', 'w': 'WC', 'factor': 0.001}}\n"
+                "  slices_2d={'DBZ': {'slice_dim': 'z', 'slice_value': 1000}}"
+            )
 
     if animate and not interactive and not gif_path:
         raise ValueError(
@@ -421,15 +465,24 @@ def quick_plot(
                     varspecs.append(make_volume(varname, **spec))
                 else:
                     raise ValueError(
-                        f"Volume spec for {varname} must be list of isosurfaces or"
-                        " dict of parameters"
+                        f"Volume spec for {varname} must be a dict of parameters"
                     )
 
         # Process vectors
         if vectors:
             for varname, spec in vectors.items():
                 if isinstance(spec, dict):
-                    varspecs.append(make_vector(varname, **spec))
+                    # Translate shorthand keys to full parameter names
+                    translated_spec = {}
+                    key_mapping = {
+                        "u": "u_varname",
+                        "v": "v_varname",
+                        "w": "w_varname",
+                    }
+                    for key, value in spec.items():
+                        translated_key = key_mapping.get(key, key)
+                        translated_spec[translated_key] = value
+                    varspecs.append(make_vector(varname, **translated_spec))
                 else:
                     raise ValueError(f"Vector spec for {varname} must be a dictionary")
 
@@ -501,7 +554,6 @@ def quick_plot(
         plotter=plotter,
         animation=animate,
         gif_path=gif_path,
-        gif_scrubber=gif_scrubber,
         screenshot_path=screenshot_path,
         interactive=interactive,
         export_html=export_html,

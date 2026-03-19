@@ -35,16 +35,16 @@ from copy import copy
 from itertools import product
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple, overload
+import warnings
+from warnings import warn
 
-import ipywidgets as widgets
-import matplotlib.pyplot as plt
 import numpy as np
 import pyvista as pv
 import xarray as xr
 from IPython.display import HTML, Image, display  # type: ignore
 from tqdm.notebook import tqdm  # type: ignore
 
-from carlee_tools import TwoWayDict, to_t_minutes
+from carlee_tools import TwoWayDict, to_t_minutes, spacing
 
 from .plotter import initialize_plotter
 from .trajectories import generate_trajectory_mesh
@@ -110,13 +110,77 @@ def add_mesh_to_subplots(
         pv_config.plotter.subplot(*subplot_key)
         # Get the right function, which is plotter.add_mesh for all except volumes
         # and plotter.add_volume for volumes
+        is_volume = isinstance(pv_mesh.varspec, PVVolumeSpec)
         add_mesh_fn = (
-            pv_config.plotter.add_volume
-            if isinstance(pv_mesh.varspec, PVVolumeSpec)
-            else pv_config.plotter.add_mesh
+            pv_config.plotter.add_volume if is_volume else pv_config.plotter.add_mesh
         )
+        # For volumes, set good defaults for scientific visualization
+        if is_volume:
+            # Explicitly specify which scalars to use
+            if "scalars" not in add_mesh_kwargs:
+                add_mesh_kwargs["scalars"] = pv_mesh.varspec.varname
+
+            # Check if we're using trame/remote rendering (client-side)
+            # vtk.js has very limited volume rendering support, so we need to
+            # either use server-side rendering or fall back to a compatible mapper
+            is_trame = hasattr(pv_config.plotter, "_theme") and hasattr(
+                pv_config.plotter, "render_window"
+            )
+            # Check if jupyter_backend is set to client (browser-side rendering)
+            try:
+                jupyter_backend = pv.global_theme.jupyter_backend
+                is_client_rendering = jupyter_backend in ("client", "trame")
+            except AttributeError:
+                is_client_rendering = False
+
+            if "mapper" not in add_mesh_kwargs:
+                if is_client_rendering:
+                    # For client-side rendering, use fixed_point which is more compatible
+                    # Note: Volume rendering in vtk.js is limited; consider using
+                    # contours instead for better remote compatibility
+                    add_mesh_kwargs["mapper"] = "fixed_point"
+                else:
+                    add_mesh_kwargs["mapper"] = "smart"
+
+            # Calculate opacity_unit_distance based on grid spacing
+            # This controls how quickly opacity accumulates through the volume.
+            # Default is bounding box diagonal which is wrong for large domains.
+            # We want it to be a small multiple of the grid spacing so that
+            # opacity accumulates appropriately over physical distances.
+            if "opacity_unit_distance" not in add_mesh_kwargs:
+                try:
+                    # Get the grid spacing from the mesh
+                    mesh = pv_mesh.mesh
+                    if hasattr(mesh, "x") and hasattr(mesh, "y") and hasattr(mesh, "z"):
+                        # RectilinearGrid has x, y, z arrays
+                        spacings = []
+                        for arr in [mesh.x, mesh.y, mesh.z]:
+                            if len(arr) > 1:
+                                spacings.append(np.median(np.diff(arr)))
+                        if spacings:
+                            # Use the minimum spacing as the unit distance
+                            # This gives appropriate opacity accumulation
+                            add_mesh_kwargs["opacity_unit_distance"] = min(spacings)
+                except Exception:
+                    pass  # Fall back to PyVista default if calculation fails
+
+        # Apply threshold to remove voxels outside the range of interest
+        # For volumes with clim, threshold to that range for major performance gains
+        # (volume rendering processes ALL voxels regardless of opacity)
+        mesh_to_add = pv_mesh.mesh
+        if is_volume and "clim" in add_mesh_kwargs:
+            clim = add_mesh_kwargs["clim"]
+            scalars = add_mesh_kwargs.get("scalars", pv_mesh.varspec.varname)
+            # Threshold to clim range - removes voxels outside, huge speedup
+            mesh_to_add = mesh_to_add.threshold(
+                value=clim, scalars=scalars, preference="cell"
+            )
+        else:
+            # Default threshold removes NaN values
+            mesh_to_add = mesh_to_add.threshold()
+
         actors[subplot_key] = add_mesh_fn(
-            pv_mesh.mesh,
+            mesh_to_add,
             show_scalar_bar=pv_mesh.varspec.scalar_bar,
             # Remember to add it with the varspec name (which doesn't have time in it)
             # rather than the mesh name, which does, so that pyvista replaces
@@ -355,6 +419,43 @@ def _create_meshes_for_frame(pv_datas: List[PVData], current_time):
                     create_mesh_kwargs = {
                         k: v for k, v in vector_spec.create_mesh_kwargs.items()
                     }
+
+                    # Auto-calculate factor if not provided
+                    # Goal: largest component in each direction = 0.5 * that direction's spacing
+                    if "factor" not in create_mesh_kwargs:
+                        component_to_dim = {"u": "x", "v": "y", "w": "z"}
+                        ratios = []
+                        for component, dim in component_to_dim.items():
+                            if (
+                                dim in this_time_simulation_ds.coords
+                                and len(this_time_simulation_ds[dim]) > 1
+                            ):
+                                with warnings.catch_warnings():
+                                    warnings.simplefilter("ignore")
+                                    dim_spacing = spacing(
+                                        this_time_simulation_ds[dim].values,
+                                        raise_if_not_evenly_spaced=False,
+                                    )
+                                max_component = np.abs(
+                                    flow_component_arrs[component]
+                                ).max()
+                                if max_component > 0:
+                                    ratios.append(max_component / dim_spacing)
+                        if ratios:
+                            # Use the largest ratio to set factor so no component exceeds 0.5 * spacing
+                            max_ratio = max(ratios)
+                            min_ratio = min(ratios)
+                            create_mesh_kwargs["factor"] = 0.5 / max_ratio
+                            # Warn if component ratios differ significantly
+                            if max_ratio / min_ratio > 10:
+                                warn(
+                                    "Vector component ratios differ by more than 10x"
+                                    f" (max/min = {max_ratio / min_ratio:.1f})."
+                                    " Auto-scaled vectors may appear too small in some"
+                                    " directions. Consider passing an explicit"
+                                    " 'factor' parameter.",
+                                    stacklevel=2,
+                                )
                     # Manually handle orient and scale
                     # For orient, default to the active vector if nothing was passed,
                     # since we'd need to do a lot more work to handle orienting
@@ -743,11 +844,8 @@ def plot_gridded_and_trajectories(
 
         # Display animation in notebook if requested
         if pv_config.show and not pv_config.interactive:
-            if pv_config.gif_scrubber:
-                display(create_gif_scrubber(gif_path))
-            else:
-                with open(pv_config.gif_path, "rb") as f:
-                    display(Image(data=f.read(), format="png"))
+            with open(pv_config.gif_path, "rb") as f:
+                display(Image(data=f.read(), format="png"))
 
         # If we are interactive, now add the last meshes to the plotter and
         # set up the slider
@@ -1099,30 +1197,3 @@ def get_subplot_keys(plotter: pv.Plotter) -> Iterator[Tuple[int, int]]:
         itertools.product: Iterator over (row, col) subplot indices.
     """
     return product(range(plotter.shape[0]), range(plotter.shape[1]))
-
-
-def create_gif_scrubber(gif_path):
-    import PIL.Image as pilimage
-
-    # Load GIF
-    gif = pilimage.open(gif_path)
-    frames = []
-
-    try:
-        while True:
-            frames.append(gif.copy())
-            gif.seek(len(frames))
-    except EOFError:
-        pass
-
-    def show_frame(frame_idx):
-        plt.figure(figsize=(8, 6))
-        plt.imshow(frames[frame_idx])
-        plt.axis("off")
-        plt.show()
-
-    slider = widgets.IntSlider(
-        value=0, min=0, max=len(frames) - 1, step=1, description="Frame:"
-    )
-
-    widgets.interact(show_frame, frame_idx=slider)

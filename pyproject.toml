@@ -28,7 +28,8 @@ classifiers = [
 ]
 
 dependencies = [
-    "pyvista[all]>=0.38",
+    "pyvista[all]>=0.47.1",
+    "trame",
     "numpy",
     "xarray",
     "matplotlib",
