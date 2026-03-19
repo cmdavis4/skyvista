@@ -91,15 +91,21 @@ from . import presets
 from .grids import (
     COORD_ALIASES,
     GEOGRAPHIC_COORD_NAMES,
+    SPHERICAL_COORD_NAMES,
+    EARTH_RADIUS_M,
     GridBuilder,
     RectilinearGridBuilder,
     CurvilinearGridBuilder,
     UnstructuredGridBuilder,
+    GeographicGridBuilder,
+    SphericalGridBuilder,
     detect_grid_type,
     get_grid_builder,
     is_geographic_grid,
+    is_spherical_grid,
     resolve_coordinate,
     resolve_coordinates,
+    resolve_spherical_coordinates,
 )
 from .grid_utils import normalize_dimension_order
 
@@ -204,18 +210,24 @@ __all__ = [
     "initialize_plotter",
     "load_example_storm_data",
     "presets",
-    # Grid builders
+    # Grid builders and coordinate utilities
     "COORD_ALIASES",
     "GEOGRAPHIC_COORD_NAMES",
+    "SPHERICAL_COORD_NAMES",
+    "EARTH_RADIUS_M",
     "GridBuilder",
     "RectilinearGridBuilder",
     "CurvilinearGridBuilder",
     "UnstructuredGridBuilder",
+    "GeographicGridBuilder",
+    "SphericalGridBuilder",
     "detect_grid_type",
     "get_grid_builder",
     "is_geographic_grid",
+    "is_spherical_grid",
     "resolve_coordinate",
     "resolve_coordinates",
+    "resolve_spherical_coordinates",
     # Deprecated (backwards compatibility)
     "quick_plot",
     "plot_trajectories_only",
