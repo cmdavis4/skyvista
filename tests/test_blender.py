@@ -7,11 +7,30 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def mock_bpy():
-    """Mock bpy module for testing without Blender."""
-    sys.modules['bpy'] = MagicMock()
+    """Mock bpy and bmesh modules for testing without Blender."""
+    # Mock both bpy and bmesh which are required by blender modules
+    mock_bpy_module = MagicMock()
+    # bpy.app.version is checked at module level, needs to return a tuple
+    mock_bpy_module.app.version = (4, 0, 0)
+    sys.modules['bpy'] = mock_bpy_module
+    sys.modules['bmesh'] = MagicMock()
+
+    # Clear any cached imports of skyvista.blender submodules
+    modules_to_remove = [key for key in sys.modules if key.startswith('skyvista.blender')]
+    for mod in modules_to_remove:
+        del sys.modules[mod]
+
     yield
+
+    # Cleanup
     if 'bpy' in sys.modules:
         del sys.modules['bpy']
+    if 'bmesh' in sys.modules:
+        del sys.modules['bmesh']
+    # Also clean up any blender module imports so tests are isolated
+    modules_to_remove = [key for key in sys.modules if key.startswith('skyvista.blender')]
+    for mod in modules_to_remove:
+        del sys.modules[mod]
 
 
 def test_blender_subpackage_import(mock_bpy):

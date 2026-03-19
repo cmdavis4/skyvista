@@ -1,4 +1,16 @@
+"""
+Legacy type definitions for skyvista.
+
+DEPRECATED: These types are maintained for backwards compatibility.
+Use the new Scene-based API instead:
+
+    from skyvista import Scene, plot_gridded, plot_trajectories
+
+See the documentation for migration guidance.
+"""
+
 import datetime as dt
+import warnings
 from abc import ABC, abstractmethod
 from copy import copy
 from dataclasses import dataclass, field
@@ -11,6 +23,16 @@ import pyvista as pv
 import xarray as xr
 
 from carlee_tools import NUMERICAL_DT_FORMAT, PathLike, dt_to_str, to_kv_str
+
+
+def _deprecation_warning(class_name: str, replacement: str):
+    """Emit deprecation warning for legacy classes."""
+    warnings.warn(
+        f"{class_name} is deprecated. Use {replacement} instead. "
+        "See skyvista documentation for migration guidance.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
 
 @dataclass
@@ -277,26 +299,31 @@ class PVGriddedData(PVData):
 
 @dataclass(kw_only=True)
 class PVMesh:
-    varspec: PVVarSpec
+    """
+    Container for a mesh and its associated visualization spec.
+
+    This class is used by both the old API (with PVVarSpec) and the new API
+    (with VarSpec from varspec.py).
+    """
+
+    varspec: Any  # PVVarSpec or VarSpec from new API
     name: Optional[str] = None
     time: Optional[dt.datetime] = None
     mesh: Optional[pv.DataObject] = None
-    actor: Optional[pv.Actor] = None
+    actor: Optional[Any] = None  # Can be dict of actors for subplots
 
     def make_mesh_name(self) -> str:
-        return (
-            to_kv_str({
-                "dt": dt_to_str(self.time, date_format=NUMERICAL_DT_FORMAT),
-            })
-            + "_"
-            + self.varspec.name
-        )
+        time_str = dt_to_str(self.time, date_format=NUMERICAL_DT_FORMAT) if self.time else "none"
+        varspec_name = getattr(self.varspec, "name", "unknown")
+        return f"dt={time_str}_{varspec_name}"
 
     def __post_init__(self):
         self.name = self.name or self.make_mesh_name()
 
     @property
     def mesh_empty(self):
+        if self.mesh is None:
+            return True
         return len(self.mesh.points) == 0
 
 

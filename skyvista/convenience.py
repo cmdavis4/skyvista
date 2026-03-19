@@ -1,577 +1,627 @@
 """
-Convenience functions for simplified pvplotting API.
+Convenience API for skyvista.
 
-This module provides high-level wrapper functions that hide the complexity
-of the dataclass-based API for common visualization tasks.
+This module provides the primary user-facing API:
+
+Scene creation functions:
+    plot_gridded    - Create scene with gridded data visualizations
+    plot_trajectories - Create scene with trajectory visualization
+
+Factory functions (create VarSpecs):
+    make_contour    - Create contour/isosurface spec
+    make_volume     - Create volume rendering spec
+    make_vectors    - Create vector field spec
+    make_slice      - Create 2D slice spec
+    make_trajectory - Create trajectory spec
+
+Example:
+    >>> import skyvista as sv
+    >>> scene = sv.plot_gridded(sim_ds, contours={"THETA": [300, 310]})
+    >>> scene.add_trajectories(traj_ds, scalar="altitude")
+    >>> scene.show()
 """
 
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import xarray as xr
 
-from .core import plot_gridded_and_trajectories
-from .plotter import initialize_plotter
-from .types_sv import (
-    PV2DSpec,
-    PVConfig,
-    PVContourSpec,
-    PVGriddedData,
-    PVTrajectoryData,
-    PVTrajectorySpec,
-    PVVectorSpec,
-    PVVolumeSpec,
+from .appearance import (
+    Appearance,
+    ContourAppearance,
+    TrajectoryAppearance,
+    VectorAppearance,
+    VolumeAppearance,
+)
+from .geometry import (
+    ContourGeometry,
+    SliceGeometry,
+    TrajectoryGeometry,
+    VectorGeometry,
+    VolumeGeometry,
+)
+from .scene import Scene
+from .varspec import (
+    ContourSpec,
+    SliceSpec,
+    TrajectorySpec,
+    VarSpec,
+    VectorSpec,
+    VolumeSpec,
 )
 
-SCALAR_BAR_DEFAULT = True
 
-# ============================================================================
-# FACTORY FUNCTIONS FOR SPECS
-# ============================================================================
+# =============================================================================
+# FACTORY FUNCTIONS (create VarSpecs)
+# =============================================================================
 
 
 def make_contour(
     varname: str,
-    isosurfaces: Optional[Union[List[float], float]] = None,
-    opacity: Optional[float] = None,
-    color: Optional[str] = None,
+    isosurfaces: Optional[List[float]] = None,
+    scalar: Optional[str] = None,
     individual_meshes: bool = False,
-    scalar_bar: bool = SCALAR_BAR_DEFAULT,
+    # Appearance
+    color: Optional[str] = None,
+    opacity: float = 1.0,
+    cmap: Optional[str] = None,
+    clim: Optional[Tuple[float, float]] = None,
+    show_scalar_bar: bool = False,
+    scalar_bar_title: Optional[str] = None,
+    style: str = "surface",
+    material_preset: Optional[str] = None,
+    # VarSpec base
+    name: Optional[str] = None,
+    empty_ok: bool = False,
     **kwargs,
-) -> PVContourSpec:
+) -> ContourSpec:
     """
-    Create a contour specification with simplified arguments.
+    Create a contour (isosurface) visualization spec.
 
     Args:
-        varname: Variable name for contouring
-        isosurfaces: Isosurface values (single value or list)
-        opacity: Mesh opacity (0-1)
-        color: Mesh color name
-        individual_meshes: Create separate mesh for each isosurface
-        scalar_bar: Show scalar bar
-        **kwargs: Additional arguments for create_mesh_kwargs or add_mesh_kwargs
+        varname: Variable to contour
+        isosurfaces: List of isosurface values (None = auto)
+        scalar: Variable to sample onto surface for coloring
+        individual_meshes: Create separate mesh per isosurface
+        color: Solid color (mutually exclusive with cmap)
+        opacity: Opacity from 0.0 to 1.0
+        cmap: Colormap for scalar coloring
+        clim: Color limits (min, max)
+        show_scalar_bar: Show scalar bar
+        scalar_bar_title: Title for scalar bar
+        style: "surface", "wireframe", or "points"
+        material_preset: Blender material preset
+        name: Unique identifier
+        empty_ok: Don't skip when mesh is empty
+        **kwargs: Additional kwargs (pyvista_create_kwargs, pyvista_add_kwargs)
 
     Returns:
-        PVContourSpec instance
+        ContourSpec instance
 
     Example:
-        >>> spec = make_contour('THETA', isosurfaces=[300, 310], opacity=0.5)
+        >>> spec = make_contour("THETA", isosurfaces=[300, 310], opacity=0.7)
     """
-    # Convert single isosurface to list
-    if isosurfaces is not None and not isinstance(isosurfaces, (list, tuple)):
-        isosurfaces = [isosurfaces]
-
-    # Separate kwargs into create_mesh and add_mesh kwargs
-    add_mesh_kwargs = {}
-    if opacity is not None:
-        add_mesh_kwargs["opacity"] = opacity
-    if color is not None:
-        add_mesh_kwargs["color"] = color
-
-    # Any remaining kwargs go to add_mesh_kwargs by default
-    # Users can override with create_mesh_kwargs_ prefix
-    create_mesh_kwargs = {}
-    for key, value in kwargs.items():
-        if key.startswith("create_mesh_"):
-            create_mesh_kwargs[key.replace("create_mesh_", "")] = value
-        else:
-            add_mesh_kwargs[key] = value
-
-    return PVContourSpec(
+    geometry = ContourGeometry(
         varname=varname,
         isosurfaces=isosurfaces,
+        scalar=scalar,
         individual_meshes=individual_meshes,
-        scalar_bar=scalar_bar,
-        create_mesh_kwargs=create_mesh_kwargs,
-        add_mesh_kwargs=add_mesh_kwargs,
+    )
+    appearance = ContourAppearance(
+        color=color,
+        opacity=opacity,
+        cmap=cmap,
+        clim=clim,
+        show_scalar_bar=show_scalar_bar,
+        scalar_bar_title=scalar_bar_title or varname,
+        style=style,
+        material_preset=material_preset,
+    )
+    return ContourSpec(
+        _geometry=geometry,
+        _appearance=appearance,
+        name=name,
+        empty_ok=empty_ok,
+        **kwargs,
     )
 
 
 def make_volume(
     varname: str,
-    opacity: Optional[Union[str, float, List[float]]] = None,
-    clim: Optional[Tuple[float, float]] = None,
+    threshold: Optional[Tuple[Optional[float], Optional[float]]] = None,
+    # Appearance
+    opacity: float = 1.0,
+    opacity_transfer: Optional[List[float]] = None,
     cmap: Optional[str] = None,
-    scalar_bar: bool = SCALAR_BAR_DEFAULT,
+    clim: Optional[Tuple[float, float]] = None,
+    show_scalar_bar: bool = False,
+    scalar_bar_title: Optional[str] = None,
+    mapper: str = "smart",
     opacity_unit_distance: Optional[float] = None,
+    material_preset: Optional[str] = None,
+    # VarSpec base
+    name: Optional[str] = None,
+    empty_ok: bool = False,
     **kwargs,
-) -> PVVolumeSpec:
+) -> VolumeSpec:
     """
-    Create a volume rendering specification.
+    Create a volume rendering spec.
 
     Args:
-        varname: Variable name for volume rendering
-        opacity: Opacity transfer function. Can be:
-            - A string: "linear", "linear_r", "sigmoid", "sigmoid_r", "geom", "geom_r"
-            - A float (0-1): uniform opacity for all values
-            - A list of floats: custom opacity transfer function
-            Default is [0, 0, 0.2, 0.6, 1.0] which makes low values transparent
-            and ramps up for higher values - good for scientific visualization.
-        clim: Color limits as (min, max) tuple. Values outside this range are clamped.
-        cmap: Colormap name (e.g., 'viridis', 'coolwarm')
-        scalar_bar: Show scalar bar
-        opacity_unit_distance: Controls how quickly opacity accumulates through the
-            volume. By default, this is automatically calculated from grid spacing.
-            Smaller values = more opaque; larger values = more transparent.
-        **kwargs: Additional arguments passed to pyvista's add_volume
+        varname: Variable to render
+        threshold: (min, max) to clip values (None for unbounded)
+        opacity: Base opacity (0.0 to 1.0)
+        opacity_transfer: Custom opacity transfer function as list
+        cmap: Colormap name
+        clim: Color limits (min, max)
+        show_scalar_bar: Show scalar bar
+        scalar_bar_title: Title for scalar bar
+        mapper: PyVista volume mapper ("smart", "fixed_point", "gpu")
+        opacity_unit_distance: Controls opacity accumulation
+        material_preset: Blender material preset
+        name: Unique identifier
+        empty_ok: Don't skip when mesh is empty
+        **kwargs: Additional kwargs
 
     Returns:
-        PVVolumeSpec instance
+        VolumeSpec instance
 
     Example:
-        >>> spec = make_volume('WC', clim=(1, 10))
-        >>> spec = make_volume('WC', clim=(0, 5), opacity=[0, 0, 0.2, 0.5, 1.0])
-        >>> spec = make_volume('WC', opacity='sigmoid')  # use built-in sigmoid
+        >>> spec = make_volume("QC", clim=(0.001, 0.01), cmap="Greys_r")
     """
-    add_mesh_kwargs = {}
-
-    # Default opacity transfer function: low values transparent, ramps up for high
-    # This works better for scientific data than "linear" or "sigmoid"
-    if opacity is None:
-        opacity = [0, 0, 0.2, 0.6, 1.0]
-    add_mesh_kwargs["opacity"] = opacity
-
-    if clim is not None:
-        add_mesh_kwargs["clim"] = clim
-
-    if cmap is not None:
-        add_mesh_kwargs["cmap"] = cmap
-
-    if opacity_unit_distance is not None:
-        add_mesh_kwargs["opacity_unit_distance"] = opacity_unit_distance
-
-    # Any remaining kwargs go to add_mesh_kwargs
-    create_mesh_kwargs = {}
-    for key, value in kwargs.items():
-        if key.startswith("create_mesh_"):
-            create_mesh_kwargs[key.replace("create_mesh_", "")] = value
-        else:
-            add_mesh_kwargs[key] = value
-
-    return PVVolumeSpec(
+    geometry = VolumeGeometry(
         varname=varname,
-        scalar_bar=scalar_bar,
-        create_mesh_kwargs=create_mesh_kwargs,
-        add_mesh_kwargs=add_mesh_kwargs,
+        threshold=threshold,
+    )
+    appearance = VolumeAppearance(
+        opacity=opacity,
+        opacity_transfer=opacity_transfer,
+        cmap=cmap,
+        clim=clim,
+        show_scalar_bar=show_scalar_bar,
+        scalar_bar_title=scalar_bar_title or varname,
+        mapper=mapper,
+        opacity_unit_distance=opacity_unit_distance,
+        material_preset=material_preset,
+    )
+    return VolumeSpec(
+        _geometry=geometry,
+        _appearance=appearance,
+        name=name,
+        empty_ok=empty_ok,
+        **kwargs,
     )
 
 
-def make_vector(
+def make_vectors(
     varname: str,
-    u_varname: str = "UC",
-    v_varname: str = "VC",
-    w_varname: str = "WC",
-    scale: Optional[str] = None,
+    u: str = "UC",
+    v: str = "VC",
+    w: str = "WC",
+    scale_by: Optional[str] = None,
     factor: Optional[float] = None,
     tolerance: Optional[float] = None,
-    opacity: Optional[float] = None,
+    # Appearance
     color: Optional[str] = None,
+    opacity: float = 1.0,
+    cmap: Optional[str] = None,
+    clim: Optional[Tuple[float, float]] = None,
+    show_scalar_bar: bool = False,
+    glyph_type: str = "arrow",
+    # VarSpec base
+    name: Optional[str] = None,
+    empty_ok: bool = False,
     **kwargs,
-) -> PVVectorSpec:
+) -> VectorSpec:
     """
-    Create a vector field specification with simplified arguments.
+    Create a vector field glyph spec.
 
     Args:
         varname: Name for the vector field
-        u_varname: Variable name for u component
-        v_varname: Variable name for v component
-        w_varname: Variable name for w component
-        scale: Variable name or value for arrow scaling
-        factor: Scale factor for glyph size (passed to pyvista's glyph method)
-        tolerance: Tolerance for merging points in glyph creation. Specify a value
-            between 0 and 1 to merge points that are a fraction of the bounding
-            box diagonal apart. Set to 0 to disable merging (keeps all points).
-        opacity: Mesh opacity (0-1)
-        color: Arrow color name
-        **kwargs: Additional arguments for glyph creation
+        u: Variable for u (x) component
+        v: Variable for v (y) component
+        w: Variable for w (z) component
+        scale_by: Variable to scale arrows by
+        factor: Scale factor for glyph size (None = auto)
+        tolerance: Point merging tolerance (0 = no merging)
+        color: Solid color
+        opacity: Opacity (0.0 to 1.0)
+        cmap: Colormap for scalar coloring
+        clim: Color limits
+        show_scalar_bar: Show scalar bar
+        glyph_type: "arrow", "cone", or "sphere"
+        name: Unique identifier
+        empty_ok: Don't skip when mesh is empty
+        **kwargs: Additional kwargs
 
     Returns:
-        PVVectorSpec instance
+        VectorSpec instance
 
     Example:
-        >>> spec = make_vector('wind', scale='speed', factor=0.001, opacity=0.7)
-        >>> spec = make_vector('wind', tolerance=0)  # disable point merging
+        >>> spec = make_vectors("wind", u="UC", v="VC", w="WC", factor=0.001)
     """
-    add_mesh_kwargs = {}
-    if opacity is not None:
-        add_mesh_kwargs["opacity"] = opacity
-    if color is not None:
-        add_mesh_kwargs["color"] = color
-
-    create_mesh_kwargs = {}
-    if scale is not None:
-        create_mesh_kwargs["scale"] = scale
-    if factor is not None:
-        create_mesh_kwargs["factor"] = factor
-    if tolerance is not None:
-        create_mesh_kwargs["tolerance"] = tolerance
-
-    # Add any extra kwargs
-    for key, value in kwargs.items():
-        if key.startswith("create_mesh_"):
-            create_mesh_kwargs[key.replace("create_mesh_", "")] = value
-        else:
-            add_mesh_kwargs[key] = value
-
-    return PVVectorSpec(
+    geometry = VectorGeometry(
         varname=varname,
-        u_varname=u_varname,
-        v_varname=v_varname,
-        w_varname=w_varname,
-        create_mesh_kwargs=create_mesh_kwargs,
-        add_mesh_kwargs=add_mesh_kwargs,
+        u_varname=u,
+        v_varname=v,
+        w_varname=w,
+        scale_by=scale_by,
+        factor=factor,
+        tolerance=tolerance,
+    )
+    appearance = VectorAppearance(
+        color=color,
+        opacity=opacity,
+        cmap=cmap,
+        clim=clim,
+        show_scalar_bar=show_scalar_bar,
+        glyph_type=glyph_type,
+    )
+    return VectorSpec(
+        _geometry=geometry,
+        _appearance=appearance,
+        name=name,
+        empty_ok=empty_ok,
+        **kwargs,
+    )
+
+
+def make_slice(
+    varname: str,
+    dim: str = "z",
+    value: Optional[float] = None,
+    method: str = "nearest",
+    # Appearance
+    color: Optional[str] = None,
+    opacity: float = 1.0,
+    cmap: Optional[str] = None,
+    clim: Optional[Tuple[float, float]] = None,
+    show_scalar_bar: bool = False,
+    scalar_bar_title: Optional[str] = None,
+    # VarSpec base
+    name: Optional[str] = None,
+    empty_ok: bool = False,
+    **kwargs,
+) -> SliceSpec:
+    """
+    Create a 2D slice spec.
+
+    Args:
+        varname: Variable to slice
+        dim: Dimension to slice along ('x', 'y', or 'z')
+        value: Value at which to slice (None = first index)
+        method: Selection method ('nearest' or 'interp')
+        color: Solid color
+        opacity: Opacity (0.0 to 1.0)
+        cmap: Colormap for scalar coloring
+        clim: Color limits
+        show_scalar_bar: Show scalar bar
+        scalar_bar_title: Title for scalar bar
+        name: Unique identifier
+        empty_ok: Don't skip when mesh is empty
+        **kwargs: Additional kwargs
+
+    Returns:
+        SliceSpec instance
+
+    Example:
+        >>> spec = make_slice("DBZ", dim="z", value=1000, cmap="pyart_NWSRef")
+    """
+    geometry = SliceGeometry(
+        varname=varname,
+        slice_dim=dim,
+        slice_value=value,
+        slice_method=method,
+    )
+    appearance = Appearance(
+        color=color,
+        opacity=opacity,
+        cmap=cmap,
+        clim=clim,
+        show_scalar_bar=show_scalar_bar,
+        scalar_bar_title=scalar_bar_title or varname,
+    )
+    return SliceSpec(
+        _geometry=geometry,
+        _appearance=appearance,
+        name=name,
+        empty_ok=empty_ok,
+        **kwargs,
     )
 
 
 def make_trajectory(
-    varname: str = "trajectories",
-    color: Optional[str] = None,
     scalar: Optional[str] = None,
+    color: Optional[str] = None,
     cmap: str = "viridis",
-    scalar_bar: bool = SCALAR_BAR_DEFAULT,
-    particles: bool = False,
+    style: str = "tube",
+    limit: Optional[int] = 1000,
+    # Geometry
+    tube_radius: float = 70,
+    head_length_frac: float = 10,
+    head_radius_frac: float = 2.5,
+    tube_resolution: int = 4,
+    head_radial_resolution: int = 30,
+    # Appearance
+    opacity: float = 1.0,
+    clim: Optional[Tuple[float, float]] = None,
+    show_scalar_bar: bool = False,
+    scalar_bar_title: Optional[str] = None,
     silhouettes: bool = False,
-    opacity: Optional[float] = None,
+    material_preset: Optional[str] = None,
+    # VarSpec base
+    name: Optional[str] = None,
+    empty_ok: bool = False,
     **kwargs,
-) -> PVTrajectorySpec:
+) -> TrajectorySpec:
     """
-    Create a trajectory specification with simplified arguments.
+    Create a trajectory visualization spec.
 
     Args:
-        varname: Name for the trajectory mesh
-        color: Solid color name (mutually exclusive with scalar)
-        scalar: Variable name for scalar coloring (mutually exclusive with color)
-        cmap: Colormap name for scalar coloring
-        scalar_bar: Show scalar bar for scalar coloring
-        particles: Render as particles instead of arrows
+        scalar: Variable for scalar coloring
+        color: Solid color (alternative to scalar)
+        cmap: Colormap for scalar coloring
+        style: "tube" or "particle"
+        limit: Maximum number of trajectories
+        tube_radius: Radius of trajectory tubes
+        head_length_frac: Arrow head length as fraction of tube radius
+        head_radius_frac: Arrow head radius as fraction of tube radius
+        tube_resolution: Number of sides on tube
+        head_radial_resolution: Resolution of arrow head
+        opacity: Opacity (0.0 to 1.0)
+        clim: Color limits
+        show_scalar_bar: Show scalar bar
+        scalar_bar_title: Title for scalar bar
         silhouettes: Add silhouette effect
-        opacity: Mesh opacity (0-1)
-        **kwargs: Additional arguments (body_radius, head_length_frac, etc.)
+        material_preset: Blender material preset
+        name: Unique identifier
+        empty_ok: Don't skip when mesh is empty
+        **kwargs: Additional kwargs
 
     Returns:
-        PVTrajectorySpec instance
+        TrajectorySpec instance
 
     Example:
-        >>> spec = make_trajectory(scalar='temperature', cmap='RdBu_r', scalar_bar=True)
+        >>> spec = make_trajectory(scalar="altitude", cmap="viridis")
     """
-    add_mesh_kwargs = {}
-    if opacity is not None:
-        add_mesh_kwargs["opacity"] = opacity
-
-    # Add any extra kwargs to add_mesh_kwargs
-    for key, value in kwargs.items():
-        if key not in [
-            "body_radius",
-            "head_length_frac",
-            "head_radius_frac",
-            "head_radial_resolution",
-            "tube_resolution",
-            "label",
-        ]:
-            add_mesh_kwargs[key] = value
-
-    # Extract trajectory-specific kwargs
-    traj_kwargs = {
-        k: kwargs[k]
-        for k in [
-            "body_radius",
-            "head_length_frac",
-            "head_radius_frac",
-            "head_radial_resolution",
-            "tube_resolution",
-            "label",
-        ]
-        if k in kwargs
-    }
-
-    return PVTrajectorySpec(
-        varname=varname,
-        color=color,
+    geometry = TrajectoryGeometry(
         scalar=scalar,
+        tube_radius=tube_radius,
+        head_length_frac=head_length_frac,
+        head_radius_frac=head_radius_frac,
+        tube_resolution=tube_resolution,
+        head_radial_resolution=head_radial_resolution,
+    )
+    appearance = TrajectoryAppearance(
+        color=color,
+        opacity=opacity,
         cmap=cmap,
-        scalar_bar=scalar_bar,
-        particles=particles,
+        clim=clim,
+        show_scalar_bar=show_scalar_bar,
+        scalar_bar_title=scalar_bar_title or scalar,
+        style=style,
         silhouettes=silhouettes,
-        add_mesh_kwargs=add_mesh_kwargs,
-        **traj_kwargs,
+        material_preset=material_preset,
+    )
+    return TrajectorySpec(
+        _geometry=geometry,
+        _appearance=appearance,
+        limit=limit,
+        name=name,
+        empty_ok=empty_ok,
+        **kwargs,
     )
 
 
-# ============================================================================
-# HIGH-LEVEL CONVENIENCE FUNCTION
-# ============================================================================
+# =============================================================================
+# SCENE CREATION FUNCTIONS
+# =============================================================================
+
+
+def plot_gridded(
+    ds: xr.Dataset,
+    contours: Optional[Dict[str, Any]] = None,
+    volumes: Optional[Dict[str, Any]] = None,
+    vectors: Optional[Dict[str, Any]] = None,
+    slices: Optional[Dict[str, Any]] = None,
+    scene: Optional[Scene] = None,
+    **scene_kwargs,
+) -> Scene:
+    """
+    Create a Scene with gridded data visualizations.
+
+    Args:
+        ds: xarray Dataset with gridded data
+        contours: Dict mapping varname to isosurface list or spec dict
+        volumes: Dict mapping varname to volume spec dict
+        vectors: Dict mapping varname to vector spec dict
+        slices: Dict mapping varname to slice spec dict
+        scene: Existing Scene to add to (creates new if None)
+        **scene_kwargs: Passed to Scene constructor (background, title, etc.)
+
+    Returns:
+        Scene with visualizations added
+
+    Example:
+        >>> scene = plot_gridded(
+        ...     ds,
+        ...     contours={"THETA": [300, 310], "W": {"isosurfaces": [5], "opacity": 0.5}},
+        ...     volumes={"QC": {"cmap": "Greys_r"}},
+        ... )
+        >>> scene.show()
+    """
+    scene = scene or Scene(**scene_kwargs)
+
+    if contours:
+        scene.add_contours(ds, contours)
+
+    if volumes:
+        for varname, spec in volumes.items():
+            spec = spec if isinstance(spec, dict) else {}
+            scene.add_volume(ds, varname, **spec)
+
+    if vectors:
+        for varname, spec in vectors.items():
+            spec = spec if isinstance(spec, dict) else {}
+            scene.add_vectors(ds, varname, **spec)
+
+    if slices:
+        for varname, spec in slices.items():
+            spec = spec if isinstance(spec, dict) else {}
+            scene.add_slice(ds, varname, **spec)
+
+    return scene
+
+
+def plot_trajectories(
+    ds: xr.Dataset,
+    scalar: Optional[str] = None,
+    color: Optional[str] = None,
+    cmap: str = "viridis",
+    style: str = "tube",
+    limit: Optional[int] = 1000,
+    scene: Optional[Scene] = None,
+    **kwargs,
+) -> Scene:
+    """
+    Create a Scene with trajectory visualization.
+
+    Args:
+        ds: xarray Dataset with trajectory data
+        scalar: Variable for scalar coloring
+        color: Solid color (alternative to scalar)
+        cmap: Colormap for scalar coloring
+        style: "tube" or "particle"
+        limit: Maximum number of trajectories
+        scene: Existing Scene to add to (creates new if None)
+        **kwargs: Additional trajectory kwargs
+
+    Returns:
+        Scene with trajectory visualization added
+
+    Example:
+        >>> scene = plot_trajectories(traj_ds, scalar="altitude", cmap="viridis")
+        >>> scene.show()
+    """
+    # Extract scene kwargs vs trajectory kwargs
+    scene_kwargs = {}
+    traj_kwargs = {}
+    scene_keys = {"background", "title", "show_grid"}
+    for key, value in kwargs.items():
+        if key in scene_keys:
+            scene_kwargs[key] = value
+        else:
+            traj_kwargs[key] = value
+
+    scene = scene or Scene(**scene_kwargs)
+    scene.add_trajectories(
+        ds,
+        scalar=scalar,
+        color=color,
+        cmap=cmap,
+        style=style,
+        limit=limit,
+        **traj_kwargs,
+    )
+    return scene
+
+
+# =============================================================================
+# DEPRECATED OLD API (for backwards compatibility)
+# =============================================================================
 
 
 def quick_plot(
     simulation_ds: Optional[xr.Dataset] = None,
     trajectory_ds: Optional[xr.Dataset] = None,
-    # Simplified contour specs
     contours: Optional[Dict[str, Any]] = None,
     volumes: Optional[Dict[str, Any]] = None,
     vectors: Optional[Dict[str, Any]] = None,
     slices_2d: Optional[Dict[str, Any]] = None,
-    # Simplified trajectory specs
     trajectory_color: Optional[str] = None,
     trajectory_scalar: Optional[str] = None,
     trajectory_cmap: str = "viridis",
     trajectory_scalar_bar: bool = False,
     trajectory_particles: bool = False,
     trajectory_limit: Optional[int] = 1000,
-    # Animation settings
     animate: bool = False,
     gif_path: Optional[str] = None,
     fps: float = 10,
     interactive: bool = False,
-    # Display settings
     show: bool = True,
     show_grid: bool = True,
     screenshot_path: Optional[str] = None,
     export_html: bool = False,
     title: Optional[str] = None,
-    # Plotter config
     plotter=None,
     background: str = "#f8f6f1",
-    # Advanced passthrough
     pv_config_kwargs: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> Dict[Any, Any]:
     """
-    Simplified interface for creating 3D visualizations of atmospheric data.
+    DEPRECATED: Use plot_gridded() and plot_trajectories() instead.
 
-    This convenience function wraps the full dataclass-based API, making it
-    easier to create common visualizations without manually instantiating
-    PVConfig, PVData, and PVVarSpec objects.
-
-    Args:
-        simulation_ds: xarray Dataset with simulation data (e.g., RAMS output)
-        trajectory_ds: xarray Dataset with trajectory/parcel data
-        contours: Dictionary mapping variable names to isosurface specifications.
-            Simple form: {'THETA': [300, 310]}
-            Full form: {'THETA': {'isosurfaces': [300, 310], 'opacity': 0.5, ...}}
-        vectors: Dictionary mapping names to vector field specifications.
-            Example: {'wind': {'u': 'UC', 'v': 'VC', 'w': 'WC', 'factor': 0.001}}
-        slices_2d: Dictionary for 2D slice specifications.
-            Example: {'DBZ': {'slice_dim': 'x', 'slice_value': -50000, 'opacity': 0.8}}
-            Supported keys:
-                - slice_dim: 'x', 'y', or 'z' (default: 'z') - dimension to slice
-                - slice_value: float or None (default: None) - value at which to slice
-                - slice_method: 'nearest' or 'interp' (default: 'nearest') - selection method
-                - opacity, cmap, scalar_bar: standard mesh styling options
-        trajectory_color: Solid color name for trajectories (e.g., 'red')
-        trajectory_scalar: Scalar variable name for coloring trajectories
-        trajectory_cmap: Colormap for trajectory scalar coloring
-        trajectory_scalar_bar: Show scalar bar for trajectories
-        trajectory_particles: Render trajectories as particles instead of arrows
-        trajectory_limit: Maximum number of trajectories to plot (default: 1000)
-        animate: Create animation instead of still image
-        gif_path: Output path for animation (required if animate=True and not interactive)
-        fps: Frames per second for animation
-        interactive: Use interactive slider instead of saving GIF
-        show: Display the plot
-        show_grid: Show coordinate grid (with correct bounds based on data)
-        screenshot_path: Path to save screenshot
-        export_html: Export HTML alongside screenshot/animation
-        title: Custom title text for the plot
-        plotter: PyVista plotter instance (created automatically if None)
-        background: Background color (hex or name)
-        pv_config_kwargs: Additional keyword arguments for PVConfig
-        **kwargs: Additional keyword arguments (reserved for future use)
-
-    Returns:
-        Dictionary mapping times to dictionaries of PVMesh objects
-
-    Raises:
-        ValueError: If animate=True but gif_path not provided (when not interactive)
-
-    Examples:
-        Simple trajectory plot:
-        >>> quick_plot(trajectory_ds=traj_ds, trajectory_color='red')
-
-        Trajectories with temperature isosurfaces:
-        >>> quick_plot(
-        ...     simulation_ds=sim_ds,
-        ...     trajectory_ds=traj_ds,
-        ...     contours={'THETA': [300, 305, 310]},
-        ...     trajectory_scalar='THETA',
-        ...     trajectory_scalar_bar=True
-        ... )
-
-        Create animation with custom styling:
-        >>> quick_plot(
-        ...     simulation_ds=sim_ds,
-        ...     trajectory_ds=traj_ds,
-        ...     contours={'RV': {'isosurfaces': [0.01, 0.02], 'opacity': 0.6}},
-        ...     trajectory_particles=True,
-        ...     animate=True,
-        ...     gif_path='output.gif',
-        ...     fps=15
-        ... )
-
-        Vector field with trajectories:
-        >>> quick_plot(
-        ...     simulation_ds=sim_ds,
-        ...     trajectory_ds=traj_ds,
-        ...     vectors={'wind': {'u': 'UC', 'v': 'VC', 'w': 'WC'}},
-        ...     trajectory_scalar='height'
-        ... )
+    This function is maintained for backwards compatibility but will be
+    removed in a future version.
     """
-    # Validate inputs
-    if simulation_ds is None and trajectory_ds is None:
-        raise ValueError("Must provide at least one of simulation_ds or trajectory_ds")
+    import warnings
 
-    # Check that if simulation_ds is provided, at least one visualization type is specified
-    if simulation_ds is not None and trajectory_ds is None:
-        if not any([contours, volumes, vectors, slices_2d]):
-            raise ValueError(
-                "When providing simulation_ds without trajectory_ds, you must specify"
-                " at least one visualization type: contours, volumes, vectors, or"
-                " slices_2d.\nExamples:\n  contours={'THETA': [300, 310]}\n "
-                " volumes={'WC': {}}\n  vectors={'wind': {'u': 'UC', 'v': 'VC', 'w':"
-                " 'WC', 'factor': 0.001}}\n  slices_2d={'DBZ': {'slice_dim': 'z',"
-                " 'slice_value': 1000}}"
-            )
-
-    if animate and not interactive and not gif_path:
-        raise ValueError(
-            "Must provide gif_path when animate=True (unless interactive=True)"
-        )
-
-    # Build PVData objects
-    pv_datas = []
-
-    # Handle simulation data
-    if simulation_ds is not None:
-        varspecs = []
-
-        # Process contours
-        if contours:
-            for varname, spec in contours.items():
-                if isinstance(spec, (list, tuple)):
-                    # Simple form: just isosurface values
-                    varspecs.append(make_contour(varname, isosurfaces=spec))
-                elif isinstance(spec, dict):
-                    # Full form: dictionary of parameters
-                    varspecs.append(make_contour(varname, **spec))
-                else:
-                    raise ValueError(
-                        f"Contour spec for {varname} must be list of isosurfaces or"
-                        " dict of parameters"
-                    )
-
-        # Process volumes
-        if volumes:
-            for varname, spec in volumes.items():
-                if isinstance(spec, dict):
-                    # Full form: dictionary of parameters
-                    varspecs.append(make_volume(varname, **spec))
-                else:
-                    raise ValueError(
-                        f"Volume spec for {varname} must be a dict of parameters"
-                    )
-
-        # Process vectors
-        if vectors:
-            for varname, spec in vectors.items():
-                if isinstance(spec, dict):
-                    # Translate shorthand keys to full parameter names
-                    translated_spec = {}
-                    key_mapping = {
-                        "u": "u_varname",
-                        "v": "v_varname",
-                        "w": "w_varname",
-                    }
-                    for key, value in spec.items():
-                        translated_key = key_mapping.get(key, key)
-                        translated_spec[translated_key] = value
-                    varspecs.append(make_vector(varname, **translated_spec))
-                else:
-                    raise ValueError(f"Vector spec for {varname} must be a dictionary")
-
-        # Process 2D slices
-        if slices_2d:
-            for varname, spec in slices_2d.items():
-                spec_dict = spec if isinstance(spec, dict) else {}
-                # Extract PV2DSpec-specific parameters
-                slice_params = {}
-                for key in ["slice_dim", "slice_value", "slice_method"]:
-                    if key in spec_dict:
-                        slice_params[key] = spec_dict.pop(key)
-
-                # Extract PVVarSpec base parameters
-                base_params = {}
-                for key in ["scalar_bar", "empty_ok", "name"]:
-                    if key in spec_dict:
-                        base_params[key] = spec_dict.pop(key)
-
-                # Separate remaining kwargs into create_mesh and add_mesh kwargs
-                create_mesh_kwargs = {}
-                add_mesh_kwargs = {}
-                for key, value in spec_dict.items():
-                    if key.startswith("create_mesh_"):
-                        create_mesh_kwargs[key.replace("create_mesh_", "")] = value
-                    else:
-                        add_mesh_kwargs[key] = value
-
-                varspecs.append(
-                    PV2DSpec(
-                        varname=varname,
-                        create_mesh_kwargs=create_mesh_kwargs,
-                        add_mesh_kwargs=add_mesh_kwargs,
-                        **base_params,
-                        **slice_params,
-                    )
-                )
-
-        if varspecs:
-            pv_datas.append(
-                PVGriddedData(simulation_ds=simulation_ds, varspecs=tuple(varspecs))
-            )
-
-    # Handle trajectory data
-    if trajectory_ds is not None:
-        # Build trajectory spec
-        traj_spec = make_trajectory(
-            color=trajectory_color,
-            scalar=trajectory_scalar,
-            cmap=trajectory_cmap,
-            scalar_bar=trajectory_scalar_bar,
-            particles=trajectory_particles,
-        )
-
-        pv_datas.append(
-            PVTrajectoryData(
-                trajectory_ds=trajectory_ds,
-                varspecs=(traj_spec,),
-                n_trajectory_limit=trajectory_limit,
-            )
-        )
-
-    # Build PVConfig
-    if plotter is None:
-        plotter = initialize_plotter(background=background)
-
-    config_kwargs = pv_config_kwargs or {}
-    pv_config = PVConfig(
-        plotter=plotter,
-        animation=animate,
-        gif_path=gif_path,
-        screenshot_path=screenshot_path,
-        interactive=interactive,
-        export_html=export_html,
-        fps=fps,
-        show=show,
-        show_grid=show_grid,
-        title=title,
-        **config_kwargs,
+    warnings.warn(
+        "quick_plot() is deprecated. Use plot_gridded() and plot_trajectories() "
+        "with Scene.show() or Scene.animate() instead.",
+        DeprecationWarning,
+        stacklevel=2,
     )
 
-    # Call the main plotting function
-    return plot_gridded_and_trajectories(pv_config=pv_config, pv_datas=pv_datas)
+    # Build scene using new API
+    scene = Scene(background=background, title=title, show_grid=show_grid)
 
+    # Add gridded data
+    if simulation_ds is not None:
+        if contours:
+            scene.add_contours(simulation_ds, contours)
+        if volumes:
+            for varname, spec in volumes.items():
+                spec = spec if isinstance(spec, dict) else {}
+                scene.add_volume(simulation_ds, varname, **spec)
+        if vectors:
+            for varname, spec in vectors.items():
+                spec = spec if isinstance(spec, dict) else {}
+                scene.add_vectors(simulation_ds, varname, **spec)
+        if slices_2d:
+            for varname, spec in slices_2d.items():
+                spec = spec if isinstance(spec, dict) else {}
+                scene.add_slice(simulation_ds, varname, **spec)
 
-# ============================================================================
-# SPECIALIZED CONVENIENCE FUNCTIONS
-# ============================================================================
+    # Add trajectories
+    if trajectory_ds is not None:
+        scene.add_trajectories(
+            trajectory_ds,
+            scalar=trajectory_scalar,
+            color=trajectory_color,
+            cmap=trajectory_cmap,
+            style="particle" if trajectory_particles else "tube",
+            show_scalar_bar=trajectory_scalar_bar,
+            limit=trajectory_limit,
+        )
+
+    # Render
+    if animate:
+        if gif_path:
+            scene.animate(gif_path, fps=fps)
+        elif interactive:
+            scene.interactive_slider()
+    elif screenshot_path:
+        scene.screenshot(screenshot_path)
+        if export_html:
+            from pathlib import Path
+
+            html_path = Path(screenshot_path).with_suffix(".html")
+            scene.export_html(html_path)
+    elif show:
+        scene.show()
+
+    # Return empty dict for backwards compatibility (old API returned meshes)
+    return {}
 
 
 def plot_trajectories_only(
@@ -584,32 +634,30 @@ def plot_trajectories_only(
     **kwargs,
 ) -> Dict[Any, Any]:
     """
-    Quick function for plotting only trajectories without simulation data.
-
-    Args:
-        trajectory_ds: Trajectory dataset
-        color: Solid color for trajectories
-        scalar: Variable for scalar coloring
-        cmap: Colormap for scalar coloring
-        animate: Create animation
-        gif_path: Output path for animation
-        **kwargs: Additional arguments passed to quick_plot
-
-    Returns:
-        Dictionary of meshes by time
-
-    Example:
-        >>> plot_trajectories_only(traj_ds, scalar='temperature', cmap='RdBu_r')
+    DEPRECATED: Use plot_trajectories() instead.
     """
-    return quick_plot(
-        trajectory_ds=trajectory_ds,
-        trajectory_color=color,
-        trajectory_scalar=scalar,
-        trajectory_cmap=cmap,
-        animate=animate,
-        gif_path=gif_path,
+    import warnings
+
+    warnings.warn(
+        "plot_trajectories_only() is deprecated. Use plot_trajectories() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    scene = plot_trajectories(
+        trajectory_ds,
+        scalar=scalar,
+        color=color,
+        cmap=cmap,
         **kwargs,
     )
+
+    if animate and gif_path:
+        scene.animate(gif_path)
+    else:
+        scene.show()
+
+    return {}
 
 
 def plot_isosurfaces_only(
@@ -620,28 +668,29 @@ def plot_isosurfaces_only(
     **kwargs,
 ) -> Dict[Any, Any]:
     """
-    Quick function for plotting only isosurfaces without trajectories.
-
-    Args:
-        simulation_ds: Simulation dataset
-        contours: Dictionary of contour specifications
-        animate: Create animation
-        gif_path: Output path for animation
-        **kwargs: Additional arguments passed to quick_plot
-
-    Returns:
-        Dictionary of meshes by time
-
-    Example:
-        >>> plot_isosurfaces_only(
-        ...     sim_ds,
-        ...     contours={'THETA': [300, 305, 310], 'RV': [0.01, 0.02]}
-        ... )
+    DEPRECATED: Use plot_gridded() instead.
     """
-    return quick_plot(
-        simulation_ds=simulation_ds,
-        contours=contours,
-        animate=animate,
-        gif_path=gif_path,
-        **kwargs,
+    import warnings
+
+    warnings.warn(
+        "plot_isosurfaces_only() is deprecated. Use plot_gridded() instead.",
+        DeprecationWarning,
+        stacklevel=2,
     )
+
+    scene = plot_gridded(simulation_ds, contours=contours, **kwargs)
+
+    if animate and gif_path:
+        scene.animate(gif_path)
+    else:
+        scene.show()
+
+    return {}
+
+
+# =============================================================================
+# ALIASES (backwards compatibility)
+# =============================================================================
+
+# Alias for consistent singular naming
+make_vector = make_vectors
