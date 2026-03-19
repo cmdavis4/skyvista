@@ -9,7 +9,27 @@ from typing import Any
 import pyvista as pv
 import xarray as xr
 
+DIMENSION_ORDER = ("time", "x", "y", "z")
 
+
+def transpose_if_xr_type(maybe_xr):
+    if isinstance(maybe_xr, (xr.Dataset, xr.DataArray)):
+        maybe_xr = maybe_xr.transpose(
+            *[x for x in DIMENSION_ORDER if x in maybe_xr.dims]
+        )
+    return maybe_xr
+
+
+def enforce_dimension_order(func):
+    def wrapper(*args, **kwargs):
+        wrapped_args = [transpose_if_xr_type(x) for x in args]
+        wrapped_kwargs = {k: transpose_if_xr_type(v) for k, v in kwargs.items()}
+        return func(*wrapped_args, **wrapped_kwargs)
+
+    return wrapper
+
+
+@enforce_dimension_order
 def select_time(ds: xr.Dataset, time: Any) -> xr.Dataset:
     """
     Select a single time from dataset, or return as-is if no time dimension.
@@ -26,6 +46,7 @@ def select_time(ds: xr.Dataset, time: Any) -> xr.Dataset:
     return ds
 
 
+@enforce_dimension_order
 def build_rectilinear_grid(ds: xr.Dataset) -> pv.RectilinearGrid:
     """
     Build PyVista RectilinearGrid from xarray Dataset.
@@ -45,6 +66,7 @@ def build_rectilinear_grid(ds: xr.Dataset) -> pv.RectilinearGrid:
     )
 
 
+@enforce_dimension_order
 def add_scalar_to_grid(
     grid: pv.RectilinearGrid,
     ds: xr.Dataset,

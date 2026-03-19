@@ -162,7 +162,9 @@ class ContourSpec(VarSpec):
     Creates isosurfaces (3D contours) from scalar field data.
     """
 
-    _geometry: ContourGeometry = field(default_factory=lambda: ContourGeometry(varname=""))
+    _geometry: ContourGeometry = field(
+        default_factory=lambda: ContourGeometry(varname="")
+    )
     _appearance: ContourAppearance = field(default_factory=ContourAppearance)
 
     @property
@@ -176,7 +178,9 @@ class ContourSpec(VarSpec):
     def __post_init__(self):
         if self.name is None:
             iso_str = ""
-            if self._geometry.isosurfaces:
+            if (self._geometry.isosurfaces is not None) and (
+                len(self._geometry.isosurfaces) > 0
+            ):
                 iso_str = f"_iso{self._geometry.isosurfaces[0]}"
             self.name = f"contour_{self._geometry.varname}{iso_str}"
 
@@ -215,7 +219,9 @@ class VolumeSpec(VarSpec):
     Renders scalar field data as a 3D volume with opacity transfer function.
     """
 
-    _geometry: VolumeGeometry = field(default_factory=lambda: VolumeGeometry(varname=""))
+    _geometry: VolumeGeometry = field(
+        default_factory=lambda: VolumeGeometry(varname="")
+    )
     _appearance: VolumeAppearance = field(default_factory=VolumeAppearance)
 
     @property
@@ -273,7 +279,9 @@ class VectorSpec(VarSpec):
     Creates arrow glyphs from vector field data.
     """
 
-    _geometry: VectorGeometry = field(default_factory=lambda: VectorGeometry(varname=""))
+    _geometry: VectorGeometry = field(
+        default_factory=lambda: VectorGeometry(varname="")
+    )
     _appearance: VectorAppearance = field(default_factory=VectorAppearance)
 
     @property
@@ -541,9 +549,9 @@ class TrajectorySpec(VarSpec):
             # Add scalar data
             if arrow_color_scalar and arrow_color_scalar_data is not None:
                 if len(arrow_color_scalar_data.shape) > 1:
-                    trajectory_points_data[arrow_color_scalar] = arrow_color_scalar_data[i][
-                        valid_mask
-                    ]
+                    trajectory_points_data[arrow_color_scalar] = (
+                        arrow_color_scalar_data[i][valid_mask]
+                    )
                 else:
                     trajectory_points_data[arrow_color_scalar] = np.full(
                         len(valid_points), arrow_color_scalar_data[i]
@@ -553,9 +561,7 @@ class TrajectorySpec(VarSpec):
 
         return trajectories_points_data
 
-    def _create_particle_mesh(
-        self, ds: xr.Dataset, trajectory_dim: str
-    ) -> pv.DataSet:
+    def _create_particle_mesh(self, ds: xr.Dataset, trajectory_dim: str) -> pv.DataSet:
         """Create particle-style mesh (spheres at final positions)."""
         from carlee_tools import maybe_cast_to_float
 

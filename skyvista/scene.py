@@ -58,6 +58,25 @@ class Scene:
     # Accumulated specs: list of (dataset, varspec) tuples
     _specs: List[Tuple[xr.Dataset, VarSpec]] = field(default_factory=list)
 
+    # Cached plotter for interactive use
+    _plotter: Optional[pv.Plotter] = field(default=None, repr=False)
+
+    @property
+    def plotter(self) -> pv.Plotter:
+        """
+        Get the PyVista Plotter for this scene.
+
+        Lazily creates the plotter on first access. The plotter can be used
+        to set camera position, scale, and other properties before calling
+        show().
+
+        Returns:
+            PyVista Plotter instance
+        """
+        if self._plotter is None:
+            self._plotter = self._build_plotter()
+        return self._plotter
+
     # -------------------------------------------------------------------------
     # Adding specs
     # -------------------------------------------------------------------------
@@ -427,7 +446,8 @@ class Scene:
         Returns:
             self (for method chaining)
         """
-        plotter = self._build_plotter()
+        # Use cached plotter if already created, otherwise build new one
+        plotter = self.plotter
         self._render_frame(plotter, time or self._get_last_time())
 
         if self.show_grid:

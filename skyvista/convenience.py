@@ -49,7 +49,6 @@ from .varspec import (
     VolumeSpec,
 )
 
-
 # =============================================================================
 # FACTORY FUNCTIONS (create VarSpecs)
 # =============================================================================
@@ -424,6 +423,7 @@ def plot_gridded(
     vectors: Optional[Dict[str, Any]] = None,
     slices: Optional[Dict[str, Any]] = None,
     scene: Optional[Scene] = None,
+    show: bool = True,
     **scene_kwargs,
 ) -> Scene:
     """
@@ -469,6 +469,9 @@ def plot_gridded(
             spec = spec if isinstance(spec, dict) else {}
             scene.add_slice(ds, varname, **spec)
 
+    if show:
+        scene.show()
+
     return scene
 
 
@@ -480,6 +483,7 @@ def plot_trajectories(
     style: str = "tube",
     limit: Optional[int] = 1000,
     scene: Optional[Scene] = None,
+    show: bool = True,
     **kwargs,
 ) -> Scene:
     """
@@ -522,6 +526,10 @@ def plot_trajectories(
         limit=limit,
         **traj_kwargs,
     )
+
+    if show:
+        scene.show()
+
     return scene
 
 
