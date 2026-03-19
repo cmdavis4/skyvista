@@ -90,15 +90,18 @@ from . import presets
 # Grid builders and coordinate utilities
 from .grids import (
     COORD_ALIASES,
+    GEOGRAPHIC_COORD_NAMES,
     GridBuilder,
     RectilinearGridBuilder,
     CurvilinearGridBuilder,
     UnstructuredGridBuilder,
     detect_grid_type,
     get_grid_builder,
+    is_geographic_grid,
     resolve_coordinate,
     resolve_coordinates,
 )
+from .grid_utils import normalize_dimension_order
 
 # =============================================================================
 # DEPRECATED API (kept for backwards compatibility)
@@ -203,12 +206,14 @@ __all__ = [
     "presets",
     # Grid builders
     "COORD_ALIASES",
+    "GEOGRAPHIC_COORD_NAMES",
     "GridBuilder",
     "RectilinearGridBuilder",
     "CurvilinearGridBuilder",
     "UnstructuredGridBuilder",
     "detect_grid_type",
     "get_grid_builder",
+    "is_geographic_grid",
     "resolve_coordinate",
     "resolve_coordinates",
     # Deprecated (backwards compatibility)

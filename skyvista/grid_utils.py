@@ -5,7 +5,7 @@ These utilities are used by multiple VarSpec classes to avoid code duplication.
 For advanced grid handling, see the grids module.
 """
 
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 import pyvista as pv
 import xarray as xr
@@ -18,27 +18,83 @@ from .grids import (
     resolve_coordinates,
 )
 
-DIMENSION_ORDER = ("time", "x", "y", "z")
+
+def normalize_dimension_order(
+    ds: xr.Dataset,
+    required_axes: Optional[List[str]] = None,
+) -> xr.Dataset:
+    """
+    Normalize dimension order for consistent data access.
+
+    Uses resolved coordinate names to determine the correct dimension order,
+    handling datasets with different naming conventions (x/y/z, lon/lat/lev, etc.).
+
+    The target order is: (time, x-axis, y-axis, z-axis) but using the actual
+    dimension names present in the dataset.
+
+    Args:
+        ds: xarray Dataset
+        required_axes: Which axes to include in ordering (default: ["x", "y", "z"])
+
+    Returns:
+        Dataset with dimensions transposed to canonical order
+    """
+    required_axes = required_axes or ["x", "y", "z"]
+
+    # Resolve coordinate names for each axis
+    resolved = {}
+    for axis in required_axes:
+        try:
+            resolved[axis] = resolve_coordinate(ds, axis)
+        except ValueError:
+            # Axis not found - skip it
+            pass
+
+    # Build target dimension order
+    # Start with time if present
+    target_dims = []
+
+    # Check for time dimension
+    try:
+        time_coord = resolve_coordinate(ds, "time")
+        if time_coord in ds.dims:
+            target_dims.append(time_coord)
+    except ValueError:
+        # No time dimension
+        if "time" in ds.dims:
+            target_dims.append("time")
+
+    # Add spatial dimensions in x, y, z order
+    for axis in ["x", "y", "z"]:
+        if axis in resolved:
+            coord_name = resolved[axis]
+            # The dimension might be named differently from the coordinate
+            # For 1D coords, the dimension name is usually the coord name
+            if coord_name in ds.dims:
+                target_dims.append(coord_name)
+            else:
+                # For multi-dimensional coords, we need to find the actual dimension
+                coord = ds[coord_name]
+                for dim in coord.dims:
+                    if dim not in target_dims:
+                        target_dims.append(dim)
+
+    # Only include dimensions that actually exist in the dataset
+    target_dims = [d for d in target_dims if d in ds.dims]
+
+    # Add any remaining dimensions not yet included (preserve their relative order)
+    for dim in ds.dims:
+        if dim not in target_dims:
+            target_dims.append(dim)
+
+    # Only transpose if order is different
+    current_dims = list(ds.dims.keys())
+    if target_dims != current_dims:
+        return ds.transpose(*target_dims)
+
+    return ds
 
 
-def transpose_if_xr_type(maybe_xr):
-    if isinstance(maybe_xr, (xr.Dataset, xr.DataArray)):
-        maybe_xr = maybe_xr.transpose(
-            *[x for x in DIMENSION_ORDER if x in maybe_xr.dims]
-        )
-    return maybe_xr
-
-
-def enforce_dimension_order(func):
-    def wrapper(*args, **kwargs):
-        wrapped_args = [transpose_if_xr_type(x) for x in args]
-        wrapped_kwargs = {k: transpose_if_xr_type(v) for k, v in kwargs.items()}
-        return func(*wrapped_args, **wrapped_kwargs)
-
-    return wrapper
-
-
-@enforce_dimension_order
 def select_time(ds: xr.Dataset, time: Any) -> xr.Dataset:
     """
     Select a single time from dataset, or return as-is if no time dimension.
@@ -50,17 +106,29 @@ def select_time(ds: xr.Dataset, time: Any) -> xr.Dataset:
     Returns:
         Dataset with single time (or original if no time dimension)
     """
-    if time is not None and "time" in ds.dims:
+    if time is None:
+        return ds
+
+    # Try to resolve time coordinate name
+    try:
+        time_coord = resolve_coordinate(ds, "time")
+        if time_coord in ds.dims:
+            return ds.sel({time_coord: time})
+    except ValueError:
+        pass
+
+    # Fallback to literal "time" dimension
+    if "time" in ds.dims:
         return ds.sel(time=time)
+
     return ds
 
 
-@enforce_dimension_order
 def build_rectilinear_grid(ds: xr.Dataset) -> pv.RectilinearGrid:
     """
     Build PyVista RectilinearGrid from xarray Dataset.
 
-    Now uses the grids module for coordinate resolution.
+    Uses the grids module for coordinate resolution.
 
     Args:
         ds: xarray Dataset with x, y, z coordinates
@@ -76,7 +144,6 @@ def build_rectilinear_grid(ds: xr.Dataset) -> pv.RectilinearGrid:
     )
 
 
-@enforce_dimension_order
 def build_grid(
     ds: xr.Dataset,
     varname: Optional[str] = None,
@@ -96,11 +163,12 @@ def build_grid(
     Returns:
         PyVista mesh (RectilinearGrid, StructuredGrid, or PolyData)
     """
+    # Normalize dimension order before building grid
+    ds = normalize_dimension_order(ds)
     builder = get_grid_builder(ds, grid_type)
     return builder.build_mesh(ds, varname)
 
 
-@enforce_dimension_order
 def add_scalar_to_grid(
     grid: pv.DataSet,
     ds: xr.Dataset,
@@ -114,6 +182,8 @@ def add_scalar_to_grid(
         ds: xarray Dataset containing the variable
         varname: Name of the variable to add
     """
+    # Normalize dimension order for consistent raveling
+    ds = normalize_dimension_order(ds)
     grid[varname] = ds[varname].values.ravel(order="F")
 
 

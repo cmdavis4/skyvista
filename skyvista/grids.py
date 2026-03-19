@@ -88,6 +88,26 @@ CF_AXIS_NAMES: Dict[str, str] = {
     "time": "T",
 }
 
+# Coordinate names that indicate geographic (lat/lon) coordinates.
+# These grids should be treated as curvilinear even if coordinates are 1D,
+# because lat/lon grids are not orthogonal in Cartesian space.
+GEOGRAPHIC_COORD_NAMES: Dict[str, List[str]] = {
+    "x": [
+        "lon", "longitude", "Longitude", "LONGITUDE",
+        "XLONG", "XLONG_M",  # WRF
+    ],
+    "y": [
+        "lat", "latitude", "Latitude", "LATITUDE",
+        "XLAT", "XLAT_M",  # WRF
+    ],
+}
+
+# CF standard names that indicate geographic coordinates
+GEOGRAPHIC_CF_STANDARD_NAMES: List[str] = [
+    "longitude", "latitude",
+    "grid_longitude", "grid_latitude",
+]
+
 
 # =============================================================================
 # COORDINATE RESOLUTION HELPERS
@@ -224,6 +244,62 @@ def has_coordinate(ds: xr.Dataset, axis: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _is_geographic_coord(ds: xr.Dataset, coord_name: str, axis: str) -> bool:
+    """
+    Check if a coordinate represents geographic (lat/lon) data.
+
+    Geographic coordinates need special handling because lat/lon grids
+    are not orthogonal in Cartesian space, even when stored as 1D arrays.
+
+    Args:
+        ds: xarray Dataset
+        coord_name: Name of the coordinate to check
+        axis: Which axis this coordinate represents ('x' or 'y')
+
+    Returns:
+        True if the coordinate is geographic (lat/lon)
+    """
+    if axis not in ("x", "y"):
+        return False
+
+    coord = ds[coord_name]
+
+    # Check CF standard_name attribute
+    standard_name = coord.attrs.get("standard_name", "")
+    if standard_name in GEOGRAPHIC_CF_STANDARD_NAMES:
+        return True
+
+    # Check units attribute (degrees indicate geographic)
+    units = coord.attrs.get("units", "").lower()
+    if "degree" in units:
+        return True
+
+    # Check coordinate name against known geographic names
+    geographic_names = GEOGRAPHIC_COORD_NAMES.get(axis, [])
+    if coord_name in geographic_names:
+        return True
+
+    return False
+
+
+def is_geographic_grid(ds: xr.Dataset, coords: Dict[str, str]) -> bool:
+    """
+    Check if dataset uses geographic (lat/lon) coordinates.
+
+    Args:
+        ds: xarray Dataset
+        coords: Dict mapping axis names to coordinate names
+
+    Returns:
+        True if x or y coordinates are geographic
+    """
+    x_is_geo = _is_geographic_coord(ds, coords["x"], "x")
+    y_is_geo = _is_geographic_coord(ds, coords["y"], "y")
+
+    # If either x or y is geographic, treat as geographic grid
+    return x_is_geo or y_is_geo
 
 
 # =============================================================================
@@ -597,22 +673,51 @@ class UnstructuredGridBuilder(GridBuilder):
 
 
 def _is_rectilinear(ds: xr.Dataset, coords: Dict[str, str]) -> bool:
-    """Check if dataset has rectilinear grid structure."""
+    """
+    Check if dataset has rectilinear grid structure.
+
+    A grid is rectilinear if:
+    1. All coordinates are 1D arrays
+    2. The coordinates are NOT geographic (lat/lon)
+
+    Geographic grids with 1D lat/lon are treated as curvilinear because
+    lat/lon grids are not orthogonal in Cartesian space.
+    """
     x_coord = ds[coords["x"]]
     y_coord = ds[coords["y"]]
     z_coord = ds[coords["z"]]
 
-    # Rectilinear: all coords are 1D
-    return x_coord.ndim == 1 and y_coord.ndim == 1 and z_coord.ndim == 1
+    # Must have 1D coordinates
+    if not (x_coord.ndim == 1 and y_coord.ndim == 1 and z_coord.ndim == 1):
+        return False
+
+    # Geographic coordinates should be treated as curvilinear
+    if is_geographic_grid(ds, coords):
+        return False
+
+    return True
 
 
 def _is_curvilinear(ds: xr.Dataset, coords: Dict[str, str]) -> bool:
-    """Check if dataset has curvilinear grid structure."""
+    """
+    Check if dataset has curvilinear grid structure.
+
+    A grid is curvilinear if:
+    1. x or y coordinates are 2D or 3D arrays, OR
+    2. The coordinates are geographic (lat/lon), even if 1D
+    """
     x_coord = ds[coords["x"]]
     y_coord = ds[coords["y"]]
 
-    # Curvilinear: x and y coords are 2D or 3D
-    return x_coord.ndim >= 2 or y_coord.ndim >= 2
+    # Explicitly 2D/3D coordinates
+    if x_coord.ndim >= 2 or y_coord.ndim >= 2:
+        return True
+
+    # Geographic coordinates with 1D arrays are still curvilinear
+    if is_geographic_grid(ds, coords):
+        return True
+
+    return False
 
 
 def detect_grid_type(ds: xr.Dataset) -> GridBuilder:
