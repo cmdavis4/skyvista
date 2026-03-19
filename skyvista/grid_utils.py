@@ -88,7 +88,7 @@ def normalize_dimension_order(
             target_dims.append(dim)
 
     # Only transpose if order is different
-    current_dims = list(ds.dims.keys())
+    current_dims = list(ds.sizes.keys())
     if target_dims != current_dims:
         return ds.transpose(*target_dims)
 

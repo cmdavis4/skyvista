@@ -244,7 +244,8 @@ def _find_coord_by_alias(ds: xr.Dataset, axis: str) -> Optional[str]:
     aliases = COORD_ALIASES.get(axis, [])
 
     # Check both coordinates and dimensions
-    available = set(ds.coords.keys()) | set(ds.dims.keys())
+    # Use ds.sizes.keys() instead of ds.sizes.keys() to avoid FutureWarning
+    available = set(ds.coords.keys()) | set(ds.sizes.keys())
 
     for alias in aliases:
         if alias in available:
@@ -282,7 +283,7 @@ def resolve_coordinate(ds: xr.Dataset, axis: str) -> str:
 
     # Build helpful error message
     aliases = COORD_ALIASES.get(axis, [])
-    available = sorted(set(ds.coords.keys()) | set(ds.dims.keys()))
+    available = sorted(set(ds.coords.keys()) | set(ds.sizes.keys()))
 
     raise ValueError(
         f"Could not find '{axis}' coordinate in dataset.\n"
@@ -706,7 +707,7 @@ class CurvilinearGridBuilder(GridBuilder):
 
         # Determine dimension names from coordinate shapes
         x_coord = ds[coords["x"]]
-        dims = x_coord.dims if x_coord.ndim > 1 else tuple(ds.dims.keys())[:3]
+        dims = x_coord.dims if x_coord.ndim > 1 else tuple(ds.sizes.keys())[:3]
 
         return cls(
             x_coord=coords["x"],
@@ -1321,7 +1322,7 @@ def detect_grid_type(ds: xr.Dataset) -> GridBuilder:
         )
     elif _is_curvilinear(ds, coords):
         x_coord = ds[coords["x"]]
-        dims = x_coord.dims if x_coord.ndim > 1 else tuple(ds.dims.keys())[:3]
+        dims = x_coord.dims if x_coord.ndim > 1 else tuple(ds.sizes.keys())[:3]
         return CurvilinearGridBuilder(
             x_coord=coords["x"],
             y_coord=coords["y"],
@@ -1392,7 +1393,7 @@ def get_grid_builder(
         )
     elif grid_type == "curvilinear":
         x_coord = ds[coords["x"]]
-        dims = x_coord.dims if x_coord.ndim > 1 else tuple(ds.dims.keys())[:3]
+        dims = x_coord.dims if x_coord.ndim > 1 else tuple(ds.sizes.keys())[:3]
         return CurvilinearGridBuilder(
             x_coord=coords["x"],
             y_coord=coords["y"],
