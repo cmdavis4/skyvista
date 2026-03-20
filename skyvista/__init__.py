@@ -116,6 +116,7 @@ from .grid_utils import normalize_dimension_order
 from .plotter import initialize_plotter
 from .mesh import PVMesh
 from . import presets
+from . import animation
 
 # Example data loader
 from .examples import load_example_storm_data
@@ -186,6 +187,7 @@ __all__ = [
     "initialize_plotter",
     "PVMesh",
     "presets",
+    "animation",
     "load_example_storm_data",
     # Camera utilities
     "calculate_camera_offset",

@@ -522,5 +522,123 @@ class TestMeshCreation:
         assert mesh.n_points > 0
 
 
+# =============================================================================
+# ANIMATION TESTS
+# =============================================================================
+
+
+class TestAnimation:
+    """Test animation-related functionality."""
+
+    def test_get_all_times(self, sample_gridded_ds_with_time):
+        """Test _get_all_times returns all time values."""
+        scene = Scene()
+        scene.add_contour(sample_gridded_ds_with_time, "THETA", isosurfaces=[300])
+
+        times = scene._get_all_times()
+        assert len(times) == 3
+        assert list(times) == [0, 1, 2]
+
+    def test_get_all_times_no_time_dimension(self, sample_gridded_ds):
+        """Test _get_all_times with no time dimension returns [None]."""
+        scene = Scene()
+        scene.add_contour(sample_gridded_ds, "THETA", isosurfaces=[300])
+
+        times = scene._get_all_times()
+        assert times == [None]
+
+    def test_get_last_time(self, sample_gridded_ds_with_time):
+        """Test _get_last_time returns last time value."""
+        scene = Scene()
+        scene.add_contour(sample_gridded_ds_with_time, "THETA", isosurfaces=[300])
+
+        last_time = scene._get_last_time()
+        assert last_time == 2
+
+    def test_get_last_time_no_time_dimension(self, sample_gridded_ds):
+        """Test _get_last_time with no time dimension returns None."""
+        scene = Scene()
+        scene.add_contour(sample_gridded_ds, "THETA", isosurfaces=[300])
+
+        last_time = scene._get_last_time()
+        assert last_time is None
+
+    def test_contour_mesh_at_different_times(self, sample_gridded_ds_with_time):
+        """Test ContourSpec creates mesh at different time steps."""
+        spec = make_contour("THETA", isosurfaces=[300])
+
+        # Create mesh at time 0
+        mesh_t0 = spec.create_mesh(sample_gridded_ds_with_time, time=0)
+        assert mesh_t0 is not None
+
+        # Create mesh at time 2
+        mesh_t2 = spec.create_mesh(sample_gridded_ds_with_time, time=2)
+        assert mesh_t2 is not None
+
+    def test_animate_creates_gif(self, sample_gridded_ds_with_time, tmp_path):
+        """Test animate method creates a GIF file."""
+        scene = Scene()
+        scene.add_slice(sample_gridded_ds_with_time, "THETA", dim="z", value=1000)
+
+        gif_path = tmp_path / "test_animation.gif"
+
+        # Mock tqdm.notebook.tqdm to avoid progress bar issues in tests
+        with patch("tqdm.notebook.tqdm", side_effect=lambda x, **kw: x):
+            scene.animate(gif_path, fps=5)
+
+        assert gif_path.exists()
+        assert gif_path.stat().st_size > 0
+
+    def test_animate_with_specific_times(self, sample_gridded_ds_with_time, tmp_path):
+        """Test animate with specific time subset."""
+        scene = Scene()
+        scene.add_slice(sample_gridded_ds_with_time, "THETA", dim="z", value=1000)
+
+        gif_path = tmp_path / "test_animation_subset.gif"
+
+        with patch("tqdm.notebook.tqdm", side_effect=lambda x, **kw: x):
+            scene.animate(gif_path, fps=5, times=[0, 2])  # Only 2 frames
+
+        assert gif_path.exists()
+
+    def test_screenshot_at_specific_time(self, sample_gridded_ds_with_time, tmp_path):
+        """Test screenshot at a specific time."""
+        scene = Scene()
+        scene.add_slice(sample_gridded_ds_with_time, "THETA", dim="z", value=1000)
+
+        png_path = tmp_path / "test_screenshot.png"
+        scene.screenshot(png_path, time=1)
+
+        assert png_path.exists()
+        assert png_path.stat().st_size > 0
+
+
+class TestTimeHandling:
+    """Test time selection and handling in VarSpecs."""
+
+    def test_select_time_with_time_dim(self, sample_gridded_ds_with_time):
+        """Test time selection when time dimension exists."""
+        from skyvista.grid_utils import select_time
+
+        ds_at_time = select_time(sample_gridded_ds_with_time, time=1)
+        assert "time" not in ds_at_time.dims
+
+    def test_select_time_without_time_dim(self, sample_gridded_ds):
+        """Test time selection when no time dimension exists."""
+        from skyvista.grid_utils import select_time
+
+        ds_result = select_time(sample_gridded_ds, time=None)
+        # Should return unchanged dataset
+        assert ds_result.dims == sample_gridded_ds.dims
+
+    def test_trajectory_time_slicing(self, sample_trajectory_ds):
+        """Test trajectory spec handles time slicing correctly."""
+        spec = make_trajectory(scalar="altitude")
+
+        # Create mesh at intermediate time (should include all times up to that point)
+        mesh = spec.create_mesh(sample_trajectory_ds, time=5)
+        assert mesh is not None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -4,6 +4,7 @@ Scene class for skyvista.
 The Scene is the central object that accumulates visualization specs and
 renders them to various targets (PyVista, HTML).
 """
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
@@ -11,7 +12,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 import pyvista as pv
 import xarray as xr
 
-from carlee_tools import PathLike
+from carlee_tools import NumpyNumeric, PathLike, warn_if_not_evenly_spaced
 
 from .grids import get_grid_builder, merge_bounds_meshes
 from .varspec import (
@@ -23,6 +24,7 @@ from .varspec import (
     VolumeSpec,
 )
 from .mesh import PVMesh
+from .animation import FPS
 
 
 @dataclass
@@ -532,7 +534,7 @@ class Scene:
     def animate(
         self,
         path: PathLike,
-        fps: float = 10,
+        fps: float | FPS = 10,
         times: Optional[List[Any]] = None,
     ) -> "Scene":
         """
@@ -550,6 +552,9 @@ class Scene:
 
         plotter = self._build_plotter()
         times = times or self._get_all_times()
+        # Rather than adding another parameter, assume we should warn if times
+        # aren't evenly spaced
+        warn_if_not_evenly_spaced(times)
 
         if self.show_grid:
             plotter.show_grid()
@@ -557,6 +562,9 @@ class Scene:
         # Add bounds once at the beginning (static throughout animation)
         self._add_bounds_to_plotter(plotter)
 
+        # Convert our fps object to a number if needed
+        if isinstance(fps, FPS):
+            fps = fps.to_fps(times)
         plotter.open_gif(str(path), fps=fps)
 
         for i, t in enumerate(tqdm(times, desc="Rendering frames")):
