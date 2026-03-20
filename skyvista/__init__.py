@@ -20,13 +20,13 @@ Example:
     >>> scene.show()
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # =============================================================================
-# PRIMARY API (new Scene-based API)
+# PRIMARY API
 # =============================================================================
 
-# Scene class
+# Scene class - the main entry point
 from .scene import Scene
 
 # Convenience functions that return Scenes
@@ -40,17 +40,12 @@ from .convenience import (
     make_vector,  # Alias for make_vectors
     make_slice,
     make_trajectory,
-    # Deprecated (kept for backwards compatibility)
-    quick_plot,
-    plot_trajectories_only,
-    plot_isosurfaces_only,
 )
 
 # =============================================================================
-# ADVANCED API (for power users)
+# VARSPEC CLASSES (for advanced users building custom specs)
 # =============================================================================
 
-# VarSpec classes
 from .varspec import (
     VarSpec,
     ContourSpec,
@@ -60,7 +55,10 @@ from .varspec import (
     TrajectorySpec,
 )
 
-# Geometry classes
+# =============================================================================
+# GEOMETRY CLASSES (for advanced users)
+# =============================================================================
+
 from .geometry import (
     Geometry,
     ContourGeometry,
@@ -70,7 +68,10 @@ from .geometry import (
     TrajectoryGeometry,
 )
 
-# Appearance classes
+# =============================================================================
+# APPEARANCE CLASSES (for advanced users)
+# =============================================================================
+
 from .appearance import (
     Appearance,
     ContourAppearance,
@@ -80,29 +81,28 @@ from .appearance import (
 )
 
 # =============================================================================
-# UTILITIES
+# GRID BUILDERS AND COORDINATE UTILITIES
 # =============================================================================
 
-from .plotter import initialize_plotter
-from .examples import load_example_storm_data
-from . import presets
-
-# Grid builders and coordinate utilities
 from .grids import (
+    # Constants
     COORD_ALIASES,
     GEOGRAPHIC_COORD_NAMES,
     SPHERICAL_COORD_NAMES,
     EARTH_RADIUS_M,
+    # Grid builders
     GridBuilder,
     RectilinearGridBuilder,
     CurvilinearGridBuilder,
     UnstructuredGridBuilder,
     GeographicGridBuilder,
     SphericalGridBuilder,
+    # Detection and factory functions
     detect_grid_type,
     get_grid_builder,
     is_geographic_grid,
     is_spherical_grid,
+    # Coordinate resolution
     resolve_coordinate,
     resolve_coordinates,
     resolve_spherical_coordinates,
@@ -110,39 +110,17 @@ from .grids import (
 from .grid_utils import normalize_dimension_order
 
 # =============================================================================
-# DEPRECATED API (kept for backwards compatibility)
+# UTILITIES
 # =============================================================================
 
-# Old core functions
-from .core import (
-    plot_gridded_and_trajectories,
-    plot_rams_and_trajectories,
-    get_subplot_keys,
-    sanitize_inputs,
-    plot_trajectory_frame,
-    animate_trajectories,
-    rectangle_mesh,
-    screenshot_render,
-    add_mesh_to_subplots,
-)
+from .plotter import initialize_plotter
+from .types_sv import PVMesh
+from . import presets
 
-# Old type definitions
-from .types_sv import (
-    PVConfig,
-    PVGriddedData,
-    PVRamsData,
-    PVTrajectoryData,
-    PVMesh,
-    PV2DSpec,
-    PVContourSpec,
-    PVVolumeSpec,
-    PVVectorSpec,
-    PVTrajectorySpec,
-    PVVarSpec,
-    PVData,
-)
+# Example data loader
+from .examples import load_example_storm_data
 
-# Trajectory utilities
+# Trajectory mesh creation utilities
 from .trajectories import (
     create_trajectory_polydata,
     create_tetrahedron_head,
@@ -168,6 +146,7 @@ except ImportError:
             "Run this code from within Blender or install bpy."
         )
 
+
 # =============================================================================
 # __all__ - Public API
 # =============================================================================
@@ -181,36 +160,30 @@ __all__ = [
     "make_contour",
     "make_volume",
     "make_vectors",
-    "make_vector",  # Alias for make_vectors
+    "make_vector",
     "make_slice",
     "make_trajectory",
-    # Blender export
-    "export_meshes_to_blender",
-    # VarSpec classes (advanced)
+    # VarSpec classes
     "VarSpec",
     "ContourSpec",
     "VolumeSpec",
     "VectorSpec",
     "SliceSpec",
     "TrajectorySpec",
-    # Geometry classes (advanced)
+    # Geometry classes
     "Geometry",
     "ContourGeometry",
     "VolumeGeometry",
     "VectorGeometry",
     "SliceGeometry",
     "TrajectoryGeometry",
-    # Appearance classes (advanced)
+    # Appearance classes
     "Appearance",
     "ContourAppearance",
     "VolumeAppearance",
     "VectorAppearance",
     "TrajectoryAppearance",
-    # Utilities
-    "initialize_plotter",
-    "load_example_storm_data",
-    "presets",
-    # Grid builders and coordinate utilities
+    # Grid builders
     "COORD_ALIASES",
     "GEOGRAPHIC_COORD_NAMES",
     "SPHERICAL_COORD_NAMES",
@@ -228,22 +201,21 @@ __all__ = [
     "resolve_coordinate",
     "resolve_coordinates",
     "resolve_spherical_coordinates",
-    # Deprecated (backwards compatibility)
-    "quick_plot",
-    "plot_trajectories_only",
-    "plot_isosurfaces_only",
-    "plot_gridded_and_trajectories",
-    "plot_rams_and_trajectories",
-    "PVConfig",
-    "PVGriddedData",
-    "PVRamsData",
-    "PVTrajectoryData",
+    "normalize_dimension_order",
+    # Utilities
+    "initialize_plotter",
     "PVMesh",
-    "PV2DSpec",
-    "PVContourSpec",
-    "PVVolumeSpec",
-    "PVVectorSpec",
-    "PVTrajectorySpec",
-    "PVVarSpec",
-    "PVData",
+    "presets",
+    "load_example_storm_data",
+    # Trajectory utilities
+    "create_trajectory_polydata",
+    "create_tetrahedron_head",
+    "create_trajectory_mesh",
+    "generate_trajectory_mesh",
+    # Camera utilities
+    "calculate_camera_offset",
+    "get_trajectory_camera",
+    "camera_follow_callback",
+    # Blender
+    "export_meshes_to_blender",
 ]

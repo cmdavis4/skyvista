@@ -10,8 +10,6 @@ import xarray as xr
 
 from carlee_tools import maybe_cast_to_float, to_kv_str
 
-from .types_sv import PVMesh, PVTrajectoryData, PVTrajectorySpec
-
 
 def create_trajectory_polydata(
     trajectory_data_list: List[Dict[str, Any]],
@@ -316,38 +314,73 @@ def create_trajectory_mesh(
 
 def generate_trajectory_mesh(
     trajectory_ds: xr.Dataset,
-    trajectory_spec: PVTrajectorySpec,
+    trajectory_spec: Any = None,
+    *,
+    # Direct parameters (used when trajectory_spec is None)
+    scalar: Optional[str] = None,
+    particles: bool = False,
+    body_radius: float = 70,
+    head_length_frac: float = 10,
+    head_radius_frac: float = 2.5,
+    head_radial_resolution: int = 30,
+    tube_resolution: int = 4,
+    create_mesh_kwargs: Optional[Dict] = None,
 ) -> pv.PolyData:
     """
     Generate trajectories as single optimized mesh for maximum performance.
 
-    Modern high-performance approach that creates all trajectories in a single
-    mesh operation using new class-based specifications.
+    Creates all trajectories in a single mesh operation for efficient rendering.
+    Can accept either a TrajectorySpec-like object or direct parameters.
 
     Args:
-        trajectory_data: PVTrajectoryData object containing the trajectory dataset.
-        trajectory_spec: PVTrajectorySpec object containing rendering specifications.
+        trajectory_ds: xarray Dataset containing trajectory data
+        trajectory_spec: Optional spec object with trajectory parameters
+        scalar: Scalar field name for coloring
+        particles: If True, render as particles instead of tubes
+        body_radius: Tube radius
+        head_length_frac: Arrow head length as fraction of radius
+        head_radius_frac: Arrow head radius as fraction of body radius
+        head_radial_resolution: Resolution of arrow head
+        tube_resolution: Number of sides on tube
+        create_mesh_kwargs: Additional kwargs for mesh creation
 
     Returns:
-        PVMesh: Single mesh object containing all trajectories with specifications.
+        pv.PolyData: Single mesh containing all trajectories
 
     Example:
-        >>> traj_data = PVTrajectoryData(trajectory_ds)
-        >>> traj_spec = PVTrajectorySpec(varname='trajectories', scalar='temperature')
-        >>> pv_mesh = generate_trajectory_mesh(traj_data, traj_spec)
+        >>> mesh = generate_trajectory_mesh(
+        ...     trajectory_ds,
+        ...     scalar='temperature',
+        ...     body_radius=100
+        ... )
     """
+    create_mesh_kwargs = create_mesh_kwargs or {}
 
-    arrow_color_scalar = trajectory_spec.scalar
-    particles = trajectory_spec.particles
-    label_scalar = False  # Can be extended to support labels from trajectory_spec
+    # Extract parameters from spec if provided
+    if trajectory_spec is not None:
+        # Support both old PVTrajectorySpec and new TrajectorySpec
+        # by checking for attributes
+        scalar = getattr(trajectory_spec, "scalar", None)
+        particles = getattr(trajectory_spec, "particles", False)
+        body_radius = getattr(trajectory_spec, "body_radius", body_radius)
+        head_length_frac = getattr(trajectory_spec, "head_length_frac", head_length_frac)
+        head_radius_frac = getattr(trajectory_spec, "head_radius_frac", head_radius_frac)
+        head_radial_resolution = getattr(
+            trajectory_spec, "head_radial_resolution", head_radial_resolution
+        )
+        tube_resolution = getattr(trajectory_spec, "tube_resolution", tube_resolution)
+        create_mesh_kwargs = getattr(trajectory_spec, "create_mesh_kwargs", {})
 
-    # Extract trajectory arrow kwargs from trajectory_spec
+    arrow_color_scalar = scalar
+    label_scalar = False  # Can be extended to support labels
+
+    # Extract trajectory arrow kwargs
     trajectory_arrow_kwargs = {
-        "body_radius": trajectory_spec.body_radius,
-        "head_length_frac": trajectory_spec.head_length_frac,
-        "head_radius_frac": trajectory_spec.head_radius_frac,
-        "head_radial_res": trajectory_spec.head_radial_resolution,
-        "tube_resolution": trajectory_spec.tube_resolution,
+        "body_radius": body_radius,
+        "head_length_frac": head_length_frac,
+        "head_radius_frac": head_radius_frac,
+        "head_radial_res": head_radial_resolution,
+        "tube_resolution": tube_resolution,
     }
     if particles:
         # Particle case - create points and convert to spheres
@@ -372,14 +405,14 @@ def generate_trajectory_mesh(
             point_mesh[arrow_color_scalar] = scalar_values[valid_mask]
 
         # Convert to sphere glyphs for particle rendering
-        # Set some defaults for the create_mesh_kwargs
-        create_mesh_kwargs = {
+        # Set some defaults for the glyph kwargs
+        glyph_kwargs = {
             "orient": False,
             "scale": False,
             "geom": pv.Sphere(radius=250, phi_resolution=8, theta_resolution=8),
         }
-        create_mesh_kwargs.update(trajectory_spec.create_mesh_kwargs)
-        particle_mesh = point_mesh.glyph(**create_mesh_kwargs)
+        glyph_kwargs.update(create_mesh_kwargs)
+        particle_mesh = point_mesh.glyph(**glyph_kwargs)
 
         return particle_mesh
 
@@ -450,7 +483,7 @@ def generate_trajectory_mesh(
         trajectories_points_data,
         arrow_color_scalar=arrow_color_scalar,
         label_scalar=label_scalar,
-        create_mesh_kwargs=trajectory_spec.create_mesh_kwargs,
+        create_mesh_kwargs=create_mesh_kwargs,
         **trajectory_arrow_kwargs,
     )
     # Save the names of the scalars if we want to see later

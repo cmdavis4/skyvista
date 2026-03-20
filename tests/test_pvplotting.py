@@ -1,386 +1,534 @@
 """
-Basic tests for the pvplotting module.
+Tests for the skyvista Scene-based API.
 
-These tests cover the core functionality of the pvplotting module including
-data classes, utility functions, and basic mesh creation logic.
+These tests cover the core functionality of the Scene class and VarSpec types.
 """
 
-from skyvista.types_sv import (
-    PV2DSpec,
-    PVConfig,
-    PVContourSpec,
-    PVMesh,
-    PVGriddedData,
-    PVRamsData,  # Keep for backwards compatibility testing
-    PVTrajectoryData,
-    PVTrajectorySpec,
-    PVVarSpec,
-    PVVectorSpec,
-)
 import pytest
 import numpy as np
 import xarray as xr
-import datetime as dt
-from pathlib import Path
 from unittest.mock import Mock, patch
 
-# Import the module components to test
-from skyvista.core import (
-    sanitize_inputs,
-    rectangle_mesh,
-    _create_meshes_for_frame,
+# Import the new API
+import skyvista as sv
+from skyvista import (
+    Scene,
+    ContourSpec,
+    VolumeSpec,
+    VectorSpec,
+    SliceSpec,
+    TrajectorySpec,
+    make_contour,
+    make_volume,
+    make_vectors,
+    make_slice,
+    make_trajectory,
+    plot_gridded,
+    plot_trajectories,
 )
+from skyvista.geometry import (
+    ContourGeometry,
+    VolumeGeometry,
+    VectorGeometry,
+    SliceGeometry,
+    TrajectoryGeometry,
+)
+from skyvista.appearance import (
+    Appearance,
+    ContourAppearance,
+    VolumeAppearance,
+    VectorAppearance,
+    TrajectoryAppearance,
+)
+from skyvista.types_sv import PVMesh
 
 
-class TestDataClasses:
-    """Test the core data classes."""
-
-    def test_pv_config_defaults(self):
-        """Test PVConfig initialization with defaults."""
-        config = PVConfig()
-        assert config.animation is False
-        assert config.gif_path is None
-        assert config.interactive is False
-        assert config.fps == 10.0
-        assert config.show is True
-        assert config.plotter is not None  # Just verify plotter exists
-        # Verify plotter is a PyVista Plotter object
-        import pyvista as pv
-
-        assert isinstance(config.plotter, pv.Plotter)
-
-    def test_pv_config_animation_validation(self):
-        """Test PVConfig validation for animation settings."""
-        with patch("skyvista.plotter.initialize_plotter"):
-            # Should raise error if animation=True but no gif_path and not interactive
-            with pytest.raises(
-                ValueError, match="Need to pass gif_path if creating an animation"
-            ):
-                PVConfig(animation=True, interactive=False, gif_path=None)
-
-    def test_pv_varspec_basic(self):
-        """Test basic PVVarSpec creation."""
-        spec = PVVarSpec(varname="temperature")
-        assert spec.varname == "temperature"
-        assert spec.scalar_bar is False
-        assert spec.add_mesh_kwargs == {}
-
-    def test_pv_contour_spec(self):
-        """Test PVContourSpec creation and defaults."""
-        spec = PVContourSpec(varname="temperature", isosurfaces=[15, 20, 25])
-        assert spec.varname == "temperature"
-        assert spec.isosurfaces == [15, 20, 25]
-        assert spec.individual_meshes is False
-
-    def test_pv_trajectory_spec_defaults(self):
-        """Test PVTrajectorySpec default values."""
-        spec = PVTrajectorySpec(varname="trajectories")
-        assert spec.varname == "trajectories"
-        assert spec.color is None
-        assert spec.particles is False
-        assert spec.body_radius == 70
-        assert spec.head_length_frac == 10
-        assert spec.head_radius_frac == 2.5
+# =============================================================================
+# FIXTURES
+# =============================================================================
 
 
-class TestTrajectoryData:
-    """Test PVTrajectoryData functionality."""
+@pytest.fixture
+def sample_gridded_ds():
+    """Create a sample gridded dataset for testing."""
+    x = np.linspace(0, 1000, 10)
+    y = np.linspace(0, 1000, 10)
+    z = np.linspace(0, 5000, 5)
 
-    def create_sample_trajectory_ds(
-        self, n_trajectories=10, n_times=5, use_legacy_name=False
-    ):
-        """Create a sample trajectory dataset for testing."""
-        times = np.arange(n_times)
-        trajectory_ix = np.arange(n_trajectories)
+    # Create sample temperature field with a gradient
+    temp = np.zeros((10, 10, 5))
+    for i, zi in enumerate(z):
+        temp[:, :, i] = 300 + zi / 100  # Temperature increases with height
 
-        # Support legacy dimension name for backwards compatibility tests
-        dim_name = "parcel_ix" if use_legacy_name else "trajectory_ix"
+    ds = xr.Dataset(
+        {"THETA": (["x", "y", "z"], temp)},
+        coords={"x": x, "y": y, "z": z},
+    )
+    return ds
 
-        # Create random trajectory data
-        x = np.random.rand(n_trajectories, n_times) * 1000
-        y = np.random.rand(n_trajectories, n_times) * 1000
-        z = np.random.rand(n_trajectories, n_times) * 1000
 
-        ds = xr.Dataset(
+@pytest.fixture
+def sample_gridded_ds_with_time():
+    """Create a sample gridded dataset with time dimension."""
+    x = np.linspace(0, 1000, 5)
+    y = np.linspace(0, 1000, 5)
+    z = np.linspace(0, 2000, 3)
+    times = np.arange(3)
+
+    temp = np.random.rand(5, 5, 3, 3) * 30 + 290
+    ds = xr.Dataset(
+        {"THETA": (["x", "y", "z", "time"], temp)},
+        coords={"x": x, "y": y, "z": z, "time": times},
+    )
+    return ds
+
+
+@pytest.fixture
+def sample_vector_ds():
+    """Create a sample dataset with vector field."""
+    x = np.linspace(0, 1000, 5)
+    y = np.linspace(0, 1000, 5)
+    z = np.linspace(0, 2000, 3)
+
+    # Create simple vector field
+    u = np.ones((5, 5, 3)) * 10
+    v = np.zeros((5, 5, 3))
+    w = np.ones((5, 5, 3)) * 2
+
+    ds = xr.Dataset(
+        {
+            "UC": (["x", "y", "z"], u),
+            "VC": (["x", "y", "z"], v),
+            "WC": (["x", "y", "z"], w),
+        },
+        coords={"x": x, "y": y, "z": z},
+    )
+    return ds
+
+
+@pytest.fixture
+def sample_trajectory_ds():
+    """Create a sample trajectory dataset."""
+    n_trajectories = 5
+    n_times = 10
+    trajectory_ix = np.arange(n_trajectories)
+    times = np.arange(n_times)
+
+    # Create simple straight-line trajectories
+    x = np.zeros((n_trajectories, n_times))
+    y = np.zeros((n_trajectories, n_times))
+    z = np.zeros((n_trajectories, n_times))
+
+    for i in range(n_trajectories):
+        x[i, :] = np.linspace(0, 500, n_times) + i * 100
+        y[i, :] = np.linspace(0, 500, n_times) + i * 50
+        z[i, :] = np.linspace(100, 2000, n_times)
+
+    # Add a scalar field for coloring
+    altitude = z.copy()
+
+    ds = xr.Dataset(
+        {
+            "x": (["trajectory_ix", "time"], x),
+            "y": (["trajectory_ix", "time"], y),
+            "z": (["trajectory_ix", "time"], z),
+            "altitude": (["trajectory_ix", "time"], altitude),
+        },
+        coords={"trajectory_ix": trajectory_ix, "time": times},
+    )
+    return ds
+
+
+# =============================================================================
+# SCENE TESTS
+# =============================================================================
+
+
+class TestScene:
+    """Test the Scene class."""
+
+    def test_scene_creation(self):
+        """Test basic scene creation."""
+        scene = Scene()
+        assert scene.background == "#f8f6f1"
+        assert scene.show_grid is True
+        assert scene.force_bounds is False
+
+    def test_scene_with_custom_settings(self):
+        """Test scene creation with custom settings."""
+        scene = Scene(
+            background="black",
+            title="Test Scene",
+            show_grid=False,
+            force_bounds=True,
+        )
+        assert scene.background == "black"
+        assert scene.title == "Test Scene"
+        assert scene.show_grid is False
+        assert scene.force_bounds is True
+
+    def test_scene_add_returns_self(self, sample_gridded_ds):
+        """Test that add methods return self for chaining."""
+        scene = Scene()
+        spec = make_contour("THETA", isosurfaces=[300])
+        result = scene.add(sample_gridded_ds, spec)
+        assert result is scene
+
+    def test_scene_method_chaining(self, sample_gridded_ds):
+        """Test that methods can be chained."""
+        scene = (
+            Scene()
+            .add_contour(sample_gridded_ds, "THETA", isosurfaces=[300])
+            .add_contour(sample_gridded_ds, "THETA", isosurfaces=[310])
+        )
+        assert len(scene._specs) == 2
+
+
+class TestAddContour:
+    """Test Scene.add_contour method."""
+
+    def test_add_contour_basic(self, sample_gridded_ds):
+        """Test basic contour addition."""
+        scene = Scene()
+        scene.add_contour(sample_gridded_ds, "THETA", isosurfaces=[300, 310])
+        assert len(scene._specs) == 1
+        ds, spec = scene._specs[0]
+        assert isinstance(spec, ContourSpec)
+
+    def test_add_contour_with_appearance(self, sample_gridded_ds):
+        """Test contour with appearance options."""
+        scene = Scene()
+        scene.add_contour(
+            sample_gridded_ds,
+            "THETA",
+            isosurfaces=[300],
+            opacity=0.5,
+            color="red",
+        )
+        _, spec = scene._specs[0]
+        assert spec.appearance.opacity == 0.5
+        assert spec.appearance.color == "red"
+
+    def test_add_contours_dict(self, sample_gridded_ds):
+        """Test add_contours with dictionary input."""
+        scene = Scene()
+        scene.add_contours(
+            sample_gridded_ds,
             {
-                "x": ([dim_name, "time"], x),
-                "y": ([dim_name, "time"], y),
-                "z": ([dim_name, "time"], z),
+                "THETA": [300, 310],  # Simple form
             },
-            coords={dim_name: trajectory_ix, "time": times},
         )
-        return ds
+        assert len(scene._specs) == 1
 
-    def test_trajectory_data_basic(self):
-        """Test basic PVTrajectoryData creation."""
-        ds = self.create_sample_trajectory_ds()
-        traj_data = PVTrajectoryData(trajectory_ds=ds, varspecs=())
-        # After sanitization, ds may be modified, so check structure rather than identity
-        assert len(traj_data.ds.dims) == 2
-        assert "trajectory_ix" in traj_data.ds.dims
-        assert "time" in traj_data.ds.dims
-        assert traj_data.n_trajectory_limit == 1000
 
-    def test_trajectory_data_sanitize_sorting(self):
-        """Test that sanitize properly sorts by time."""
-        # Create dataset with times out of order
-        times = np.array([2, 0, 1])
-        ds = self.create_sample_trajectory_ds(n_times=3)
-        ds = ds.assign_coords(time=times)
+class TestAddVolume:
+    """Test Scene.add_volume method."""
 
-        traj_data = PVTrajectoryData(trajectory_ds=ds, varspecs=())
-        traj_data.sanitize()
+    def test_add_volume_basic(self, sample_gridded_ds):
+        """Test basic volume addition."""
+        scene = Scene()
+        scene.add_volume(sample_gridded_ds, "THETA")
+        assert len(scene._specs) == 1
+        _, spec = scene._specs[0]
+        assert isinstance(spec, VolumeSpec)
+        assert spec.is_volume() is True
 
-        # Check that times are now sorted
-        expected_times = np.array([0, 1, 2])
-        np.testing.assert_array_equal(traj_data.ds.time.values, expected_times)
 
-    def test_trajectory_data_trajectory_limit(self):
-        """Test trajectory limiting functionality."""
-        ds = self.create_sample_trajectory_ds(
-            n_trajectories=2000
-        )  # More than default limit
+class TestAddVectors:
+    """Test Scene.add_vectors method."""
 
-        # Warning is emitted during initialization
-        with pytest.warns(UserWarning, match="Limiting to 100 trajectories"):
-            traj_data = PVTrajectoryData(
-                trajectory_ds=ds, n_trajectory_limit=100, varspecs=()
+    def test_add_vectors_basic(self, sample_vector_ds):
+        """Test basic vector addition."""
+        scene = Scene()
+        scene.add_vectors(
+            sample_vector_ds,
+            "wind",
+            u="UC",
+            v="VC",
+            w="WC",
+        )
+        assert len(scene._specs) == 1
+        _, spec = scene._specs[0]
+        assert isinstance(spec, VectorSpec)
+
+
+class TestAddSlice:
+    """Test Scene.add_slice method."""
+
+    def test_add_slice_basic(self, sample_gridded_ds):
+        """Test basic slice addition."""
+        scene = Scene()
+        scene.add_slice(sample_gridded_ds, "THETA", dim="z", value=2000)
+        assert len(scene._specs) == 1
+        _, spec = scene._specs[0]
+        assert isinstance(spec, SliceSpec)
+
+
+class TestAddTrajectories:
+    """Test Scene.add_trajectories method."""
+
+    def test_add_trajectories_basic(self, sample_trajectory_ds):
+        """Test basic trajectory addition."""
+        scene = Scene()
+        scene.add_trajectories(sample_trajectory_ds)
+        assert len(scene._specs) == 1
+        _, spec = scene._specs[0]
+        assert isinstance(spec, TrajectorySpec)
+
+    def test_add_trajectories_with_scalar(self, sample_trajectory_ds):
+        """Test trajectories with scalar coloring."""
+        scene = Scene()
+        scene.add_trajectories(sample_trajectory_ds, scalar="altitude")
+        _, spec = scene._specs[0]
+        assert spec.geometry.scalar == "altitude"
+
+    def test_add_trajectories_particle_style(self, sample_trajectory_ds):
+        """Test trajectories with particle style."""
+        scene = Scene()
+        scene.add_trajectories(sample_trajectory_ds, style="particle")
+        _, spec = scene._specs[0]
+        assert spec.appearance.style == "particle"
+
+
+# =============================================================================
+# FACTORY FUNCTION TESTS
+# =============================================================================
+
+
+class TestFactoryFunctions:
+    """Test the factory functions."""
+
+    def test_make_contour(self):
+        """Test make_contour factory function."""
+        spec = make_contour("THETA", isosurfaces=[300, 310], opacity=0.7)
+        assert isinstance(spec, ContourSpec)
+        assert spec.geometry.varname == "THETA"
+        assert spec.geometry.isosurfaces == [300, 310]
+        assert spec.appearance.opacity == 0.7
+
+    def test_make_volume(self):
+        """Test make_volume factory function."""
+        spec = make_volume("QC", threshold=(0.001, 0.01), cmap="Greys_r")
+        assert isinstance(spec, VolumeSpec)
+        assert spec.geometry.varname == "QC"
+        assert spec.geometry.threshold == (0.001, 0.01)
+        assert spec.appearance.cmap == "Greys_r"
+
+    def test_make_vectors(self):
+        """Test make_vectors factory function."""
+        spec = make_vectors("wind", u="UC", v="VC", w="WC", factor=0.5)
+        assert isinstance(spec, VectorSpec)
+        assert spec.geometry.varname == "wind"
+        assert spec.geometry.u_varname == "UC"
+        assert spec.geometry.factor == 0.5
+
+    def test_make_slice(self):
+        """Test make_slice factory function."""
+        spec = make_slice("THETA", dim="z", value=1000)
+        assert isinstance(spec, SliceSpec)
+        assert spec.geometry.varname == "THETA"
+        assert spec.geometry.slice_dim == "z"
+        assert spec.geometry.slice_value == 1000
+
+    def test_make_trajectory(self):
+        """Test make_trajectory factory function."""
+        spec = make_trajectory(scalar="altitude", style="tube", limit=500)
+        assert isinstance(spec, TrajectorySpec)
+        assert spec.geometry.scalar == "altitude"
+        assert spec.appearance.style == "tube"
+        assert spec.limit == 500
+
+
+# =============================================================================
+# VARSPEC TESTS
+# =============================================================================
+
+
+class TestVarSpecs:
+    """Test VarSpec classes."""
+
+    def test_contour_spec_auto_name(self):
+        """Test ContourSpec auto-generates name."""
+        spec = make_contour("THETA", isosurfaces=[300])
+        assert "contour" in spec.name
+        assert "THETA" in spec.name
+
+    def test_volume_spec_auto_name(self):
+        """Test VolumeSpec auto-generates name."""
+        spec = make_volume("QC")
+        assert "volume" in spec.name
+        assert "QC" in spec.name
+
+    def test_varspec_pyvista_kwargs(self):
+        """Test VarSpec generates PyVista kwargs."""
+        spec = make_contour("THETA", opacity=0.5, color="red")
+        kwargs = spec.get_pyvista_kwargs()
+        assert kwargs["opacity"] == 0.5
+        assert kwargs["color"] == "red"
+
+    def test_varspec_blender_config(self):
+        """Test VarSpec generates Blender config."""
+        spec = make_contour("THETA", material_preset="cloud")
+        config = spec.get_blender_config()
+        assert config["spec_type"] == "ContourSpec"
+        # material_preset may be in the config if appearance includes it
+        assert "name" in config or "spec_type" in config
+
+
+# =============================================================================
+# GEOMETRY TESTS
+# =============================================================================
+
+
+class TestGeometry:
+    """Test Geometry classes."""
+
+    def test_contour_geometry(self):
+        """Test ContourGeometry creation."""
+        geom = ContourGeometry(varname="THETA", isosurfaces=[300, 310])
+        assert geom.varname == "THETA"
+        assert geom.isosurfaces == [300, 310]
+
+    def test_volume_geometry(self):
+        """Test VolumeGeometry creation."""
+        geom = VolumeGeometry(varname="QC", threshold=(0.001, 0.01))
+        assert geom.varname == "QC"
+        assert geom.threshold == (0.001, 0.01)
+
+    def test_vector_geometry(self):
+        """Test VectorGeometry creation."""
+        geom = VectorGeometry(varname="wind", u_varname="UC", v_varname="VC", w_varname="WC")
+        assert geom.varname == "wind"
+        assert geom.u_varname == "UC"
+
+    def test_trajectory_geometry(self):
+        """Test TrajectoryGeometry creation."""
+        geom = TrajectoryGeometry(scalar="altitude", tube_radius=100)
+        assert geom.scalar == "altitude"
+        assert geom.tube_radius == 100
+
+
+# =============================================================================
+# APPEARANCE TESTS
+# =============================================================================
+
+
+class TestAppearance:
+    """Test Appearance classes."""
+
+    def test_appearance_defaults(self):
+        """Test default appearance values."""
+        app = Appearance()
+        assert app.opacity == 1.0
+        assert app.color is None
+        assert app.show_scalar_bar is False
+
+    def test_contour_appearance(self):
+        """Test ContourAppearance creation."""
+        app = ContourAppearance(opacity=0.5, color="blue", style="wireframe")
+        assert app.opacity == 0.5
+        assert app.color == "blue"
+        assert app.style == "wireframe"
+
+    def test_trajectory_appearance(self):
+        """Test TrajectoryAppearance creation."""
+        app = TrajectoryAppearance(style="particle", silhouettes=True)
+        assert app.style == "particle"
+        assert app.silhouettes is True
+
+    def test_appearance_to_pyvista_kwargs(self):
+        """Test conversion to PyVista kwargs."""
+        app = ContourAppearance(opacity=0.5, color="red", cmap="viridis")
+        kwargs = app.to_pyvista_kwargs()
+        assert kwargs["opacity"] == 0.5
+        assert kwargs["color"] == "red"
+        assert kwargs["cmap"] == "viridis"
+
+
+# =============================================================================
+# PVMESH TESTS
+# =============================================================================
+
+
+class TestPVMesh:
+    """Test PVMesh class."""
+
+    def test_pvmesh_creation(self):
+        """Test PVMesh creation."""
+        spec = make_contour("THETA")
+        mesh = PVMesh(varspec=spec)
+        assert mesh.varspec is spec
+        assert mesh.mesh is None
+        assert mesh.actor is None
+
+    def test_pvmesh_auto_name(self):
+        """Test PVMesh auto-generates name."""
+        spec = make_contour("THETA")
+        mesh = PVMesh(varspec=spec)
+        assert mesh.name is not None
+        assert "contour" in mesh.name
+
+    def test_pvmesh_empty_check(self):
+        """Test mesh_empty property."""
+        spec = make_contour("THETA")
+        mesh = PVMesh(varspec=spec, mesh=None)
+        assert mesh.mesh_empty is True
+
+
+# =============================================================================
+# CONVENIENCE FUNCTION TESTS
+# =============================================================================
+
+
+class TestConvenienceFunctions:
+    """Test convenience functions."""
+
+    def test_plot_gridded_creates_scene(self, sample_gridded_ds):
+        """Test plot_gridded creates a scene."""
+        with patch.object(Scene, "show"):
+            scene = plot_gridded(
+                sample_gridded_ds, contours={"THETA": [300, 310]}, show=True
             )
+        assert isinstance(scene, Scene)
+        assert len(scene._specs) == 1
 
-        assert len(traj_data.ds.trajectory_ix) == 100
-
-    def test_trajectory_data_empty_time_error(self):
-        """Test error handling for empty time dimension."""
-        # Create dataset with empty time dimension
-        ds = xr.Dataset(
-            {"x": (["trajectory_ix", "time"], np.array([]).reshape(0, 0))},
-            coords={"trajectory_ix": [], "time": []},
-        )
-
-        # Error should be raised during initialization due to sanitize in __post_init__
-        with pytest.raises(ValueError, match="time.*dimension of length 0"):
-            PVTrajectoryData(trajectory_ds=ds, varspecs=())
-
-    def test_backwards_compatibility_parcel_ix(self):
-        """Test that parcel_ix dimension name still works with deprecation warning."""
-        ds = self.create_sample_trajectory_ds(use_legacy_name=True)
-
-        # Should emit deprecation warning
-        with pytest.warns(
-            DeprecationWarning, match="parcel_ix.*deprecated.*trajectory_ix"
-        ):
-            traj_data = PVTrajectoryData(trajectory_ds=ds, varspecs=())
-
-        # Data should still be usable
-        assert "parcel_ix" in traj_data.ds.dims
-        assert "time" in traj_data.ds.dims
+    def test_plot_trajectories_creates_scene(self, sample_trajectory_ds):
+        """Test plot_trajectories creates a scene."""
+        with patch.object(Scene, "show"):
+            scene = plot_trajectories(sample_trajectory_ds, scalar="altitude", show=True)
+        assert isinstance(scene, Scene)
+        assert len(scene._specs) == 1
 
 
-class TestGriddedData:
-    """Test PVGriddedData functionality."""
-
-    def create_sample_gridded_ds(self, nx=10, ny=10, nz=5, n_times=3):
-        """Create a sample gridded dataset for testing."""
-        x = np.linspace(0, 1000, nx)
-        y = np.linspace(0, 1000, ny)
-        z = np.linspace(0, 5000, nz)
-        times = np.arange(n_times)
-
-        # Create sample temperature field
-        temp = np.random.rand(nx, ny, nz, n_times) * 30 + 273.15  # Kelvin
-
-        ds = xr.Dataset(
-            {"temperature": (["x", "y", "z", "time"], temp)},
-            coords={"x": x, "y": y, "z": z, "time": times},
-        )
-        return ds
-
-    def test_gridded_data_basic(self):
-        """Test basic PVGriddedData creation."""
-        ds = self.create_sample_gridded_ds()
-        gridded_data = PVGriddedData(simulation_ds=ds, varspecs=())
-        # After sanitization, ds may be modified, so check structure rather than identity
-        assert "temperature" in gridded_data.ds.data_vars
-        assert "x" in gridded_data.ds.dims
-        assert "y" in gridded_data.ds.dims
-        assert "z" in gridded_data.ds.dims
-
-    def test_gridded_data_sanitize_transpose(self):
-        """Test that sanitize properly transposes dimensions."""
-        # Create dataset with dimensions in wrong order
-        ds = self.create_sample_gridded_ds()
-        ds = ds.transpose("time", "z", "y", "x")  # Wrong order
-
-        gridded_data = PVGriddedData(simulation_ds=ds, varspecs=())
-        gridded_data.sanitize()
-
-        # Check that dimensions are in correct order
-        expected_dims = ("x", "y", "z", "time")
-        assert gridded_data.ds.temperature.dims == expected_dims
-
-    def test_backwards_compatibility_rams_data(self):
-        """Test that PVRamsData alias still works."""
-        ds = self.create_sample_gridded_ds()
-        # PVRamsData should still work as an alias
-        rams_data = PVRamsData(simulation_ds=ds, varspecs=())
-        assert "temperature" in rams_data.ds.data_vars
-        # Verify it's actually a PVGriddedData instance
-        assert isinstance(rams_data, PVGriddedData)
-
-
-class TestUtilityFunctions:
-    """Test utility functions."""
-
-    def test_rectangle_mesh_xy_plane(self):
-        """Test rectangle_mesh with z as singleton dimension."""
-        x = np.linspace(0, 10, 5)
-        y = np.linspace(0, 5, 3)
-        z = np.array([1.0])  # Singleton
-
-        mesh = rectangle_mesh(x, y, z)
-
-        # Check that mesh has correct shape
-        assert mesh.n_points == len(x) * len(y)
-        # Check z coordinates are constant
-        assert np.allclose(mesh.points[:, 2], 1.0)
-
-    def test_rectangle_mesh_invalid_input(self):
-        """Test rectangle_mesh error handling."""
-        x = np.linspace(0, 10, 5)
-        y = np.linspace(0, 5, 3)
-        z = np.linspace(0, 2, 4)  # No singleton dimension
-
-        with pytest.raises(
-            ValueError, match="Exactly one of x, y, or z must be of length 1"
-        ):
-            rectangle_mesh(x, y, z)
-
-    def test_sanitize_inputs_both_none(self):
-        """Test sanitize_inputs error when both inputs are None."""
-        with pytest.raises(ValueError, match="Must pass at least one"):
-            sanitize_inputs([])
+# =============================================================================
+# MESH CREATION TESTS
+# =============================================================================
 
 
 class TestMeshCreation:
-    """Test basic mesh creation functionality."""
+    """Test mesh creation from VarSpecs."""
 
-    def create_simple_gridded_data(self, varspecs=()):
-        """Create simple gridded data for testing."""
-        x = np.linspace(0, 1000, 3)
-        y = np.linspace(0, 1000, 3)
-        z = np.linspace(0, 1000, 3)
+    def test_contour_creates_mesh(self, sample_gridded_ds):
+        """Test ContourSpec creates a mesh."""
+        spec = make_contour("THETA", isosurfaces=[310])
+        mesh = spec.create_mesh(sample_gridded_ds, time=None)
+        assert mesh is not None
+        # May be empty if no points at that isosurface
 
-        # Simple temperature field
-        temp = np.ones((3, 3, 3)) * 300
-        temp[1, 1, 1] = 320  # Hot spot
+    def test_slice_creates_mesh(self, sample_gridded_ds):
+        """Test SliceSpec creates a mesh."""
+        spec = make_slice("THETA", dim="z", value=2500)
+        mesh = spec.create_mesh(sample_gridded_ds, time=None)
+        assert mesh is not None
+        assert mesh.n_points > 0
 
-        ds = xr.Dataset(
-            {"temperature": (["x", "y", "z"], temp)}, coords={"x": x, "y": y, "z": z}
-        )
-        return PVGriddedData(simulation_ds=ds, varspecs=varspecs)
-
-    def create_simple_trajectory_data(self, varspecs=()):
-        """Create simple trajectory data for testing."""
-        times = np.array([0, 1, 2])
-        trajectory_ix = np.array([0, 1])
-
-        # Simple straight-line trajectories
-        x = np.array([[0, 100, 200], [0, 150, 300]])  # 2 trajectories, 3 times
-        y = np.array([[0, 100, 200], [50, 150, 250]])
-        z = np.array([[100, 150, 200], [200, 250, 300]])
-
-        ds = xr.Dataset(
-            {
-                "x": (["trajectory_ix", "time"], x),
-                "y": (["trajectory_ix", "time"], y),
-                "z": (["trajectory_ix", "time"], z),
-            },
-            coords={"trajectory_ix": trajectory_ix, "time": times},
-        )
-        return PVTrajectoryData(trajectory_ds=ds, varspecs=varspecs)
-
-    @pytest.mark.skip(reason="Test requires complex mocking of refactored internals")
-    @patch("skyvista.trajectories.generate_trajectory_mesh")
-    def test_create_meshes_for_frame_trajectories_only(self, mock_generate_traj):
-        """Test mesh creation with only trajectory data."""
-        # Mock trajectory mesh generation
-        mock_mesh = Mock()
-        mock_pv_mesh = Mock()
-        mock_pv_mesh.time = None
-        mock_generate_traj.return_value = mock_pv_mesh
-
-        traj_spec = PVTrajectorySpec(varname="trajectories")
-        traj_data = self.create_simple_trajectory_data(varspecs=(traj_spec,))
-
-        meshes = _create_meshes_for_frame(
-            pv_datas=[traj_data],
-            current_time=0,  # Use integer time to match trajectory data coords
-        )
-
-        assert len(meshes) == 1
-        assert mock_generate_traj.called
-
-    @pytest.mark.skip(reason="Test requires complex mocking of refactored internals")
-    @patch("pyvista.RectilinearGrid")
-    def test_create_meshes_for_frame_contour_only(self, mock_rectilinear):
-        """Test mesh creation with only contour data."""
-        # Mock PyVista grid
-        mock_grid = Mock()
-        mock_contour_mesh = Mock()
-        mock_contour_mesh.points = np.array([[0, 0, 0]])  # Non-empty mesh
-        mock_grid.contour.return_value = mock_contour_mesh
-        # Allow item assignment for the mock grid
-        mock_grid.__setitem__ = Mock()
-        mock_rectilinear.return_value = mock_grid
-
-        contour_spec = PVContourSpec(varname="temperature", isosurfaces=[310])
-        gridded_data = self.create_simple_gridded_data(varspecs=(contour_spec,))
-
-        meshes = _create_meshes_for_frame(
-            pv_datas=[gridded_data],
-            current_time=None,
-        )
-
-        assert len(meshes) == 1
-        assert mock_rectilinear.called
-        assert mock_grid.contour.called
-
-    def test_create_meshes_for_frame_empty_varspecs(self):
-        """Test mesh creation with empty varspecs."""
-        gridded_data = self.create_simple_gridded_data(varspecs=())  # Empty varspecs
-
-        meshes = _create_meshes_for_frame(
-            pv_datas=[gridded_data], current_time=None
-        )
-
-        assert len(meshes) == 0
-
-    @pytest.mark.skip(reason="Time dimension handling changed in refactored API")
-    def test_create_meshes_for_frame_time_dimension_error(self):
-        """Test error when simulation_ds has time dimension."""
-        # Create dataset with time dimension (not allowed for single frame)
-        x = np.linspace(0, 1000, 3)
-        y = np.linspace(0, 1000, 3)
-        z = np.linspace(0, 1000, 3)
-        times = np.array([0, 1])
-
-        temp = np.ones((3, 3, 3, 2)) * 300
-        ds = xr.Dataset(
-            {"temperature": (["x", "y", "z", "time"], temp)},
-            coords={"x": x, "y": y, "z": z, "time": times},
-        )
-
-        contour_spec = PVContourSpec(varname="temperature", isosurfaces=[310])
-        gridded_data = PVGriddedData(simulation_ds=ds, varspecs=(contour_spec,))
-
-        with pytest.raises(
-            ValueError, match="simulation_ds must not have a time dimension"
-        ):
-            _create_meshes_for_frame(
-                pv_datas=[gridded_data],
-                current_time=None,
-            )
+    def test_vector_creates_mesh(self, sample_vector_ds):
+        """Test VectorSpec creates a mesh."""
+        spec = make_vectors("wind", u="UC", v="VC", w="WC")
+        mesh = spec.create_mesh(sample_vector_ds, time=None)
+        assert mesh is not None
+        assert mesh.n_points > 0
 
 
 if __name__ == "__main__":
-    pytest.main([__file__])
+    pytest.main([__file__, "-v"])
