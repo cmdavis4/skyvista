@@ -8435,7 +8435,7 @@ packages:
 - pypi: ./
   name: skyvista
   version: 0.1.1
-  sha256: daad1115f16d2542aa434d7a5a4bf14d71297e116dac5a3c4d9b30aa786f2a04
+  sha256: bffb21c7b1b805b5cebb3e7434aa214f18e22b6def28414bcd6b777882cdcfa3
   requires_dist:
   - pyvista[all]>=0.47.1
   - trame
@@ -8446,15 +8446,11 @@ packages:
   - ipython
   - tqdm
   - ipywidgets
-  - pandas ; extra == 'blender'
-  - pyopenvdb ; extra == 'vdb'
   - pytest>=7.0 ; extra == 'dev'
   - pytest-cov ; extra == 'dev'
   - black ; extra == 'dev'
   - ruff ; extra == 'dev'
   - mypy ; extra == 'dev'
-  - pandas ; extra == 'all'
-  - pyopenvdb ; extra == 'all'
   requires_python: '>=3.10'
   editable: true
 - conda: https://conda.anaconda.org/conda-forge/noarch/sniffio-1.3.1-pyhd8ed1ab_2.conda

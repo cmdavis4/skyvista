@@ -4,8 +4,6 @@
 
 `skyvista` provides scientifically accurate 3D visualization of gridded atmospheric science data (but likely applicable in many other disciplines). Skyvista's visualizations are primarily built on top of the [pyvista](https://pyvista.org/#) library, and with the appropriate setup can be rendered directly in jupyter notebooks or IDEs, or written to disk. Pyvista is capable of creating interactive visualizations in pure HTML, making these visualizations conveniently portable. Skyvista also contains simplified functionality for creating animations of 3D data using pyvista, in addition to single visualizations.
 
-Skyvista also contains functionality for exporting meshes and volumes created with pyvista to a variety of file formats. One intended use of this functionality is to create visualizations in Blender, using the optional `[blender]` addon functionality. Skyvista can handle things like setting up animations from a set of single-timestep output files, assigning shaders, as well as more complicated logic.
-
 **Further documentation is forthcoming!**
 
 ## Features
@@ -14,7 +12,7 @@ Skyvista also contains functionality for exporting meshes and volumes created wi
 - **Trajectory visualization**: Visualize Lagrangian trajectory data, with options to show trajectories as continuous arrows or as particles at their instantaneous positions (among other visualization customizations)
 - **Animation support**: Generate animations of time-evolving gridded atmospheric data
 - **Camera control**: Advanced camera positioning and following for dynamic views
-- **Blender functionality**: Export meshes to Blender and setup scenes and animations
+- **Interactive HTML export**: Export scenes to standalone interactive HTML files
 - **Convenience API**: Simple functions for quick visualizations
 
 ## Installation

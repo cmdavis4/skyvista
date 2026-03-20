@@ -104,10 +104,3 @@ def test_trajectory_spec_has_mesh_methods():
     assert hasattr(TrajectorySpec, '_create_trajectory_polydata')
     assert hasattr(TrajectorySpec, '_create_tetrahedron_head')
     assert hasattr(TrajectorySpec, '_create_tube_mesh')
-
-
-def test_blender_functions_available():
-    """Test that Blender export functions are accessible"""
-    import skyvista as sv
-
-    assert hasattr(sv, 'export_meshes_to_blender')

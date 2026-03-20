@@ -3,7 +3,7 @@ Appearance classes for skyvista.
 
 Appearance classes specify *how* visualizations look - colors, opacity,
 colormaps, etc. They are renderer-agnostic and can be converted to
-PyVista kwargs or Blender material configurations.
+PyVista kwargs.
 """
 
 from dataclasses import dataclass, field
@@ -25,7 +25,6 @@ class Appearance:
         clim: Color limits as (min, max) tuple
         show_scalar_bar: Whether to show a scalar bar
         scalar_bar_title: Title for the scalar bar
-        material_preset: Preset name for Blender export (e.g., "cloud", "rain")
     """
 
     color: Optional[str] = None
@@ -34,7 +33,6 @@ class Appearance:
     clim: Optional[Tuple[float, float]] = None
     show_scalar_bar: bool = False
     scalar_bar_title: Optional[str] = None
-    material_preset: Optional[str] = None
 
     def to_pyvista_kwargs(self) -> Dict[str, Any]:
         """Convert appearance to PyVista add_mesh kwargs."""
@@ -56,27 +54,6 @@ class Appearance:
             kwargs["scalar_bar_args"] = {"title": self.scalar_bar_title}
 
         return kwargs
-
-    def to_blender_config(self) -> Dict[str, Any]:
-        """Convert appearance to Blender material/object configuration."""
-        config: Dict[str, Any] = {}
-
-        if self.material_preset:
-            config["material"] = self.material_preset
-
-        if self.color:
-            config["base_color"] = self.color
-
-        if self.opacity < 1.0:
-            config["alpha"] = self.opacity
-
-        if self.cmap:
-            config["colormap"] = self.cmap
-
-        if self.clim:
-            config["clim"] = self.clim
-
-        return config
 
 
 @dataclass
@@ -158,10 +135,3 @@ class TrajectoryAppearance(Appearance):
         kwargs = super().to_pyvista_kwargs()
         # Silhouettes would be handled separately in render_to_plotter
         return kwargs
-
-    def to_blender_config(self) -> Dict[str, Any]:
-        config = super().to_blender_config()
-        config["style"] = self.style
-        if self.silhouettes:
-            config["silhouettes"] = True
-        return config

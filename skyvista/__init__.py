@@ -127,18 +127,6 @@ from .camera import (
     camera_follow_callback,
 )
 
-# Blender export utilities (optional - requires bpy)
-try:
-    from .blender.pv_to_blender import export_meshes_to_blender
-except ImportError:
-    # bpy not available - provide stub that raises helpful error
-    def export_meshes_to_blender(*args, **kwargs):
-        raise ImportError(
-            "export_meshes_to_blender requires Blender's bpy module. "
-            "Run this code from within Blender or install bpy."
-        )
-
-
 # =============================================================================
 # __all__ - Public API
 # =============================================================================
@@ -203,6 +191,4 @@ __all__ = [
     "calculate_camera_offset",
     "get_trajectory_camera",
     "camera_follow_callback",
-    # Blender
-    "export_meshes_to_blender",
 ]

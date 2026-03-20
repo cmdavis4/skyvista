@@ -1,6 +1,6 @@
 # Pyvista setup tips
 
-Setting up pyvista can be a bit onerous depending on your specific configuration—whether you're using a remote machine, whether you're using jupyter from within VSCode, etc. The [PyVista installation docs](https://docs.pyvista.org/getting-started/installation), and the [section on remote machines specifically](https://docs.pyvista.org/getting-started/installation#running-on-remote-servers) if that's your use case, are the place to start. With that said, I found that I fell into several gaps following those docs directly, and so I've compiled further setup tips here.
+Setting up pyvista can be a bit onerous depending on your specific configuration—whether you're using a remote machine, whether you're using jupyter from within VSCode, etc. The [PyVista installation docs](https://docs.pyvista.org/getting-started/installation), and the [section on remote machines specifically](https://docs.pyvista.org/getting-started/installation#running-on-remote-servers) if that's your use case, are the place to start. With that said, I found that I fell into several gaps following those docs directly, and so I've compiled further setup tips here. Perhaps one day everything will run in docker containers and none of this will be necessary.
 
 ### Testing whether PyVista works
 As you work through everything below this point, the simplest way to test if PyVista/skyvista are working is to produce a simple render. Here is some example code that provides a simple test; if you see a bunny and can move/rotate it, you're in business:

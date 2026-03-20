@@ -4,8 +4,7 @@ VarSpec classes for skyvista.
 VarSpec classes are self-rendering visualization specifications that know how to:
 1. Extract/create a mesh from data (create_mesh)
 2. Provide rendering parameters for PyVista (get_pyvista_kwargs)
-3. Provide export configuration for Blender (get_blender_config)
-4. Render themselves to a plotter (render_to_plotter)
+3. Render themselves to a plotter (render_to_plotter)
 
 This design follows the Open/Closed Principle - adding new visualization types
 requires creating a new VarSpec subclass, not modifying the Scene.
@@ -95,15 +94,6 @@ class VarSpec(ABC):
         kwargs = self.appearance.to_pyvista_kwargs()
         kwargs.update(self.pyvista_add_kwargs)  # Escape hatch overrides
         return kwargs
-
-    def get_blender_config(self) -> Dict[str, Any]:
-        """Get configuration for Blender export."""
-        config = self.appearance.to_blender_config()
-        # Add geometry info that Blender might need
-        config["spec_type"] = self.__class__.__name__
-        if self.name:
-            config["name"] = self.name
-        return config
 
     def is_volume(self) -> bool:
         """Whether this spec renders as a volume (vs surface mesh)."""

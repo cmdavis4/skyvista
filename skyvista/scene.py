@@ -2,10 +2,8 @@
 Scene class for skyvista.
 
 The Scene is the central object that accumulates visualization specs and
-renders them to various targets (PyVista, Blender, HTML).
+renders them to various targets (PyVista, HTML).
 """
-
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
@@ -33,7 +31,7 @@ class Scene:
     Container for visualization specs and scene-level configuration.
 
     The Scene accumulates (dataset, varspec) pairs and renders them to
-    various targets (PyVista, Blender, HTML). The Scene is renderer-agnostic
+    various targets (PyVista, HTML). The Scene is renderer-agnostic
     until a render method is called.
 
     Attributes:
@@ -127,7 +125,6 @@ class Scene:
         clim: Optional[Tuple[float, float]] = None,
         show_scalar_bar: bool = False,
         style: str = "surface",
-        material_preset: Optional[str] = None,
         **kwargs,
     ) -> "Scene":
         """
@@ -145,7 +142,6 @@ class Scene:
             clim: Color limits
             show_scalar_bar: Show scalar bar
             style: "surface", "wireframe", or "points"
-            material_preset: Blender material preset
             **kwargs: Additional VarSpec kwargs
 
         Returns:
@@ -164,7 +160,6 @@ class Scene:
             clim=clim,
             show_scalar_bar=show_scalar_bar,
             style=style,
-            material_preset=material_preset,
             **kwargs,
         )
         return self.add(ds, spec)
@@ -210,7 +205,6 @@ class Scene:
         clim: Optional[Tuple[float, float]] = None,
         show_scalar_bar: bool = False,
         mapper: str = "smart",
-        material_preset: Optional[str] = None,
         **kwargs,
     ) -> "Scene":
         """
@@ -226,7 +220,6 @@ class Scene:
             clim: Color limits
             show_scalar_bar: Show scalar bar
             mapper: PyVista volume mapper
-            material_preset: Blender material preset
             **kwargs: Additional VarSpec kwargs
 
         Returns:
@@ -243,7 +236,6 @@ class Scene:
             clim=clim,
             show_scalar_bar=show_scalar_bar,
             mapper=mapper,
-            material_preset=material_preset,
             **kwargs,
         )
         return self.add(ds, spec)
@@ -652,80 +644,3 @@ class Scene:
 
         plotter.export_html(str(path))
         return self
-
-    # -------------------------------------------------------------------------
-    # Blender export
-    # -------------------------------------------------------------------------
-
-    def export_blender(
-        self,
-        output_dir: PathLike,
-        preset: str = "quick_preview",
-        times: Optional[List[Any]] = None,
-    ) -> "Scene":
-        """
-        Export scene to Blender-ready format.
-
-        Creates mesh files (.vtk) and configuration files (.json) that can
-        be imported into Blender using the skyvista.blender module.
-
-        Args:
-            output_dir: Directory to export to
-            preset: Render quality preset
-            times: Specific times to export (default: all times)
-
-        Returns:
-            self (for method chaining)
-        """
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        times = times or self._get_all_times()
-
-        # Export meshes with their configs
-        for t in times:
-            for ds, spec in self._specs:
-                mesh = spec.create_mesh(ds, t)
-                if mesh is not None and len(mesh.points) > 0:
-                    config = spec.get_blender_config()
-                    self._export_mesh_for_blender(mesh, spec, config, t, output_dir)
-
-        # Export scene config
-        self._export_scene_config(output_dir, preset)
-
-        return self
-
-    def _export_mesh_for_blender(
-        self,
-        mesh: pv.DataSet,
-        spec: VarSpec,
-        config: Dict[str, Any],
-        time: Any,
-        output_dir: Path,
-    ) -> None:
-        """Export a single mesh for Blender import."""
-        # Generate filename
-        if time is not None:
-            time_str = str(time).replace(" ", "_").replace(":", "-")
-        else:
-            time_str = "static"
-        filename = f"{time_str}_{spec.name}.vtk"
-
-        # Save mesh
-        mesh.save(output_dir / filename)
-
-        # Save config as sidecar JSON
-        config_file = (output_dir / filename).with_suffix(".json")
-        with open(config_file, "w") as f:
-            json.dump(config, f, indent=2)
-
-    def _export_scene_config(self, output_dir: Path, preset: str) -> None:
-        """Export scene-level configuration."""
-        config = {
-            "background": self.background,
-            "preset": preset,
-            "title": self.title,
-            # Future: camera, lighting
-        }
-        with open(output_dir / "scene_config.json", "w") as f:
-            json.dump(config, f, indent=2)

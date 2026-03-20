@@ -67,7 +67,6 @@ def make_contour(
     show_scalar_bar: bool = False,
     scalar_bar_title: Optional[str] = None,
     style: str = "surface",
-    material_preset: Optional[str] = None,
     # VarSpec base
     name: Optional[str] = None,
     empty_ok: bool = False,
@@ -88,7 +87,6 @@ def make_contour(
         show_scalar_bar: Show scalar bar
         scalar_bar_title: Title for scalar bar
         style: "surface", "wireframe", or "points"
-        material_preset: Blender material preset
         name: Unique identifier
         empty_ok: Don't skip when mesh is empty
         **kwargs: Additional kwargs (pyvista_create_kwargs, pyvista_add_kwargs)
@@ -113,7 +111,6 @@ def make_contour(
         show_scalar_bar=show_scalar_bar,
         scalar_bar_title=scalar_bar_title or varname,
         style=style,
-        material_preset=material_preset,
     )
     return ContourSpec(
         geometry=geometry,
@@ -136,7 +133,6 @@ def make_volume(
     scalar_bar_title: Optional[str] = None,
     mapper: str = "smart",
     opacity_unit_distance: Optional[float] = None,
-    material_preset: Optional[str] = None,
     # VarSpec base
     name: Optional[str] = None,
     empty_ok: bool = False,
@@ -156,7 +152,6 @@ def make_volume(
         scalar_bar_title: Title for scalar bar
         mapper: PyVista volume mapper ("smart", "fixed_point", "gpu")
         opacity_unit_distance: Controls opacity accumulation
-        material_preset: Blender material preset
         name: Unique identifier
         empty_ok: Don't skip when mesh is empty
         **kwargs: Additional kwargs
@@ -180,7 +175,6 @@ def make_volume(
         scalar_bar_title=scalar_bar_title or varname,
         mapper=mapper,
         opacity_unit_distance=opacity_unit_distance,
-        material_preset=material_preset,
     )
     return VolumeSpec(
         geometry=geometry,
@@ -346,7 +340,6 @@ def make_trajectory(
     show_scalar_bar: bool = False,
     scalar_bar_title: Optional[str] = None,
     silhouettes: bool = False,
-    material_preset: Optional[str] = None,
     # VarSpec base
     name: Optional[str] = None,
     empty_ok: bool = False,
@@ -371,7 +364,6 @@ def make_trajectory(
         show_scalar_bar: Show scalar bar
         scalar_bar_title: Title for scalar bar
         silhouettes: Add silhouette effect
-        material_preset: Blender material preset
         name: Unique identifier
         empty_ok: Don't skip when mesh is empty
         **kwargs: Additional kwargs
@@ -399,7 +391,6 @@ def make_trajectory(
         scalar_bar_title=scalar_bar_title or scalar,
         style=style,
         silhouettes=silhouettes,
-        material_preset=material_preset,
     )
     return TrajectorySpec(
         geometry=geometry,

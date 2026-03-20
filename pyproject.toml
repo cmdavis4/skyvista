@@ -40,24 +40,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-blender = [
-    "pandas",
-    # Note: bpy (Blender as Python module) must be installed separately
-    # It's not available via pip/conda and requires Blender installation
-]
-vdb = [
-    "pyopenvdb",
-]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
     "black",
     "ruff",
     "mypy",
-]
-all = [
-    "pandas",
-    "pyopenvdb",
 ]
 
 [project.urls]
@@ -67,7 +55,7 @@ Documentation = "https://github.com/cmdavis4/skyvista#readme"
 "Source Code" = "https://github.com/cmdavis4/skyvista"
 
 [tool.setuptools]
-packages = ["skyvista", "skyvista.blender", "skyvista.blender.vdb"]
+packages = ["skyvista", "skyvista.presets"]
 
 [tool.setuptools.package-data]
 skyvista = ["py.typed"]

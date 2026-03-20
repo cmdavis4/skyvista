@@ -366,14 +366,6 @@ class TestVarSpecs:
         assert kwargs["opacity"] == 0.5
         assert kwargs["color"] == "red"
 
-    def test_varspec_blender_config(self):
-        """Test VarSpec generates Blender config."""
-        spec = make_contour("THETA", material_preset="cloud")
-        config = spec.get_blender_config()
-        assert config["spec_type"] == "ContourSpec"
-        # material_preset may be in the config if appearance includes it
-        assert "name" in config or "spec_type" in config
-
 
 # =============================================================================
 # GEOMETRY TESTS
