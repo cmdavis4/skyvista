@@ -72,17 +72,9 @@ class VarSpec(ABC):
     pyvista_create_kwargs: Dict[str, Any] = field(default_factory=dict)
     pyvista_add_kwargs: Dict[str, Any] = field(default_factory=dict)
 
-    @property
-    @abstractmethod
-    def geometry(self) -> Geometry:
-        """Return the geometry specification."""
-        ...
-
-    @property
-    @abstractmethod
-    def appearance(self) -> Appearance:
-        """Return the appearance specification."""
-        ...
+    # Subclasses must define geometry and appearance fields
+    geometry: Geometry = field(init=False)
+    appearance: Appearance = field(init=False)
 
     @abstractmethod
     def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
@@ -171,48 +163,40 @@ class ContourSpec(VarSpec):
     Creates isosurfaces (3D contours) from scalar field data.
     """
 
-    _geometry: ContourGeometry = field(
+    geometry: ContourGeometry = field(
         default_factory=lambda: ContourGeometry(varname="")
     )
-    _appearance: ContourAppearance = field(default_factory=ContourAppearance)
-
-    @property
-    def geometry(self) -> ContourGeometry:
-        return self._geometry
-
-    @property
-    def appearance(self) -> ContourAppearance:
-        return self._appearance
+    appearance: ContourAppearance = field(default_factory=ContourAppearance)
 
     def __post_init__(self):
         if self.name is None:
             iso_str = ""
-            if (self._geometry.isosurfaces is not None) and (
-                len(self._geometry.isosurfaces) > 0
+            if (self.geometry.isosurfaces is not None) and (
+                len(self.geometry.isosurfaces) > 0
             ):
-                iso_str = f"_iso{self._geometry.isosurfaces[0]}"
-            self.name = f"contour_{self._geometry.varname}{iso_str}"
+                iso_str = f"_iso{self.geometry.isosurfaces[0]}"
+            self.name = f"contour_{self.geometry.varname}{iso_str}"
 
     def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
         ds = select_time(ds, time)
 
         # Build grid (auto-detects type or uses explicit grid_type)
-        varname = self._geometry.varname
+        varname = self.geometry.varname
         grid = build_grid(ds, varname=varname, grid_type=self.grid_type)
 
         # Create contour
         contour_kwargs = {"scalars": varname}
-        if self._geometry.isosurfaces is not None:
-            contour_kwargs["isosurfaces"] = self._geometry.isosurfaces
+        if self.geometry.isosurfaces is not None:
+            contour_kwargs["isosurfaces"] = self.geometry.isosurfaces
         contour_kwargs.update(self.pyvista_create_kwargs)
 
         mesh = grid.contour(**contour_kwargs)
 
         # Sample scalar field if different from contour variable
-        if self._geometry.scalar and self._geometry.scalar != varname:
-            add_scalar_to_grid(grid, ds, self._geometry.scalar)
+        if self.geometry.scalar and self.geometry.scalar != varname:
+            add_scalar_to_grid(grid, ds, self.geometry.scalar)
             mesh = mesh.sample(grid, pass_point_arrays=False, pass_cell_arrays=False)
-            mesh.set_active_scalars(self._geometry.scalar)
+            mesh.set_active_scalars(self.geometry.scalar)
 
         return mesh
 
@@ -225,22 +209,14 @@ class VolumeSpec(VarSpec):
     Renders scalar field data as a 3D volume with opacity transfer function.
     """
 
-    _geometry: VolumeGeometry = field(
+    geometry: VolumeGeometry = field(
         default_factory=lambda: VolumeGeometry(varname="")
     )
-    _appearance: VolumeAppearance = field(default_factory=VolumeAppearance)
-
-    @property
-    def geometry(self) -> VolumeGeometry:
-        return self._geometry
-
-    @property
-    def appearance(self) -> VolumeAppearance:
-        return self._appearance
+    appearance: VolumeAppearance = field(default_factory=VolumeAppearance)
 
     def __post_init__(self):
         if self.name is None:
-            self.name = f"volume_{self._geometry.varname}"
+            self.name = f"volume_{self.geometry.varname}"
 
     def is_volume(self) -> bool:
         return True
@@ -249,12 +225,12 @@ class VolumeSpec(VarSpec):
         ds = select_time(ds, time)
 
         # Build grid (auto-detects type or uses explicit grid_type)
-        varname = self._geometry.varname
+        varname = self.geometry.varname
         grid = build_grid(ds, varname=varname, grid_type=self.grid_type)
 
         # Apply threshold if specified
-        if self._geometry.threshold:
-            low, high = self._geometry.threshold
+        if self.geometry.threshold:
+            low, high = self.geometry.threshold
             # Handle None values in threshold
             if low is None and high is not None:
                 grid = grid.threshold(value=high, scalars=varname, invert=True)
@@ -269,7 +245,7 @@ class VolumeSpec(VarSpec):
         kwargs = super().get_pyvista_kwargs()
 
         # Set scalars explicitly for volumes
-        kwargs["scalars"] = self._geometry.varname
+        kwargs["scalars"] = self.geometry.varname
 
         return kwargs
 
@@ -282,22 +258,14 @@ class VectorSpec(VarSpec):
     Creates arrow glyphs from vector field data.
     """
 
-    _geometry: VectorGeometry = field(
+    geometry: VectorGeometry = field(
         default_factory=lambda: VectorGeometry(varname="")
     )
-    _appearance: VectorAppearance = field(default_factory=VectorAppearance)
-
-    @property
-    def geometry(self) -> VectorGeometry:
-        return self._geometry
-
-    @property
-    def appearance(self) -> VectorAppearance:
-        return self._appearance
+    appearance: VectorAppearance = field(default_factory=VectorAppearance)
 
     def __post_init__(self):
         if self.name is None:
-            self.name = f"vector_{self._geometry.varname}"
+            self.name = f"vector_{self.geometry.varname}"
 
     def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
         from carlee_tools import spacing
@@ -310,12 +278,12 @@ class VectorSpec(VarSpec):
         grid = build_grid(ds, grid_type=self.grid_type)
 
         # Stack vector components
-        u = ds[self._geometry.u_varname].values.ravel(order="F")
-        v = ds[self._geometry.v_varname].values.ravel(order="F")
-        w = ds[self._geometry.w_varname].values.ravel(order="F")
+        u = ds[self.geometry.u_varname].values.ravel(order="F")
+        v = ds[self.geometry.v_varname].values.ravel(order="F")
+        w = ds[self.geometry.w_varname].values.ravel(order="F")
 
         vectors = np.vstack([u, v, w]).T
-        vector_name = self._geometry.varname
+        vector_name = self.geometry.varname
         grid[vector_name] = vectors
         grid.set_active_vectors(vector_name)
 
@@ -328,7 +296,7 @@ class VectorSpec(VarSpec):
         glyph_kwargs = {"orient": vector_name}
 
         # Auto-calculate factor if not provided
-        factor = self._geometry.factor
+        factor = self.geometry.factor
         if factor is None:
             # Use resolved coordinate names
             coords = resolve_coordinates(ds, ["x", "y", "z"])
@@ -352,14 +320,14 @@ class VectorSpec(VarSpec):
             glyph_kwargs["factor"] = factor
 
         # Handle scaling
-        if self._geometry.scale_by:
-            add_scalar_to_grid(grid, ds, self._geometry.scale_by)
-            glyph_kwargs["scale"] = self._geometry.scale_by
+        if self.geometry.scale_by:
+            add_scalar_to_grid(grid, ds, self.geometry.scale_by)
+            glyph_kwargs["scale"] = self.geometry.scale_by
         else:
             glyph_kwargs["scale"] = vector_name
 
-        if self._geometry.tolerance is not None:
-            glyph_kwargs["tolerance"] = self._geometry.tolerance
+        if self.geometry.tolerance is not None:
+            glyph_kwargs["tolerance"] = self.geometry.tolerance
 
         glyph_kwargs.update(self.pyvista_create_kwargs)
 
@@ -374,20 +342,12 @@ class SliceSpec(VarSpec):
     Extracts a 2D slice from 3D scalar field data.
     """
 
-    _geometry: SliceGeometry = field(default_factory=lambda: SliceGeometry(varname=""))
-    _appearance: Appearance = field(default_factory=Appearance)
-
-    @property
-    def geometry(self) -> SliceGeometry:
-        return self._geometry
-
-    @property
-    def appearance(self) -> Appearance:
-        return self._appearance
+    geometry: SliceGeometry = field(default_factory=lambda: SliceGeometry(varname=""))
+    appearance: Appearance = field(default_factory=Appearance)
 
     def __post_init__(self):
         if self.name is None:
-            self.name = f"slice_{self._geometry.varname}_{self._geometry.slice_dim}"
+            self.name = f"slice_{self.geometry.varname}_{self.geometry.slice_dim}"
 
     def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
         from .grids import resolve_coordinates
@@ -398,9 +358,9 @@ class SliceSpec(VarSpec):
         coord_names = resolve_coordinates(ds, ["x", "y", "z"])
 
         # Get slice parameters
-        slice_dim = self._geometry.slice_dim
-        slice_value = self._geometry.slice_value
-        slice_method = self._geometry.slice_method
+        slice_dim = self.geometry.slice_dim
+        slice_value = self.geometry.slice_value
+        slice_method = self.geometry.slice_method
 
         # Map slice_dim to actual coordinate name if needed
         slice_coord = coord_names.get(slice_dim, slice_dim)
@@ -438,7 +398,7 @@ class SliceSpec(VarSpec):
         mesh = pv.StructuredGrid(grids["x"], grids["y"], grids["z"], **create_kwargs)
 
         # Add variable data
-        varname = self._geometry.varname
+        varname = self.geometry.varname
         var_data = sliced_data[varname].values
         mesh[varname] = var_data.ravel(order="F")
 
@@ -454,22 +414,14 @@ class TrajectorySpec(VarSpec):
     All trajectory mesh creation logic is encapsulated within this class.
     """
 
-    _geometry: TrajectoryGeometry = field(default_factory=TrajectoryGeometry)
-    _appearance: TrajectoryAppearance = field(default_factory=TrajectoryAppearance)
+    geometry: TrajectoryGeometry = field(default_factory=TrajectoryGeometry)
+    appearance: TrajectoryAppearance = field(default_factory=TrajectoryAppearance)
     limit: Optional[int] = 1000
-
-    @property
-    def geometry(self) -> TrajectoryGeometry:
-        return self._geometry
-
-    @property
-    def appearance(self) -> TrajectoryAppearance:
-        return self._appearance
 
     def __post_init__(self):
         if self.name is None:
-            style = self._appearance.style
-            scalar_part = f"_{self._geometry.scalar}" if self._geometry.scalar else ""
+            style = self.appearance.style
+            scalar_part = f"_{self.geometry.scalar}" if self.geometry.scalar else ""
             self.name = f"trajectory_{style}{scalar_part}"
 
     def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
@@ -497,7 +449,7 @@ class TrajectorySpec(VarSpec):
             return pv.PolyData()
 
         # Handle particle style
-        if self._appearance.style == "particle":
+        if self.appearance.style == "particle":
             return self._create_particle_mesh(ds, trajectory_dim)
 
         # Extract trajectory data for tube rendering
@@ -510,8 +462,8 @@ class TrajectorySpec(VarSpec):
         mesh = self._create_tube_mesh(trajectories_points_data)
 
         # Store scalar info
-        if self._geometry.scalar:
-            mesh.field_data["arrow_color_scalar"] = self._geometry.scalar
+        if self.geometry.scalar:
+            mesh.field_data["arrow_color_scalar"] = self.geometry.scalar
 
         return mesh
 
@@ -522,7 +474,7 @@ class TrajectorySpec(VarSpec):
         from carlee_tools import maybe_cast_to_float
 
         trajectories_points_data = []
-        scalar = self._geometry.scalar
+        scalar = self.geometry.scalar
 
         x_data = ds["x"].values
         y_data = ds["y"].values
@@ -581,9 +533,9 @@ class TrajectorySpec(VarSpec):
         point_mesh = pv.PolyData(points)
 
         # Add scalar data
-        if self._geometry.scalar and self._geometry.scalar in ds:
-            scalar_values = maybe_cast_to_float(ds[self._geometry.scalar].values)
-            point_mesh[self._geometry.scalar] = scalar_values[valid_mask]
+        if self.geometry.scalar and self.geometry.scalar in ds:
+            scalar_values = maybe_cast_to_float(ds[self.geometry.scalar].values)
+            point_mesh[self.geometry.scalar] = scalar_values[valid_mask]
 
         # Convert to sphere glyphs
         glyph_kwargs = {
@@ -610,12 +562,12 @@ class TrajectorySpec(VarSpec):
         if not trajectory_data_list:
             return pv.PolyData()
 
-        scalar = self._geometry.scalar
-        body_radius = self._geometry.tube_radius
-        head_length_frac = self._geometry.head_length_frac
-        head_radius_frac = self._geometry.head_radius_frac
-        head_radial_res = self._geometry.head_radial_resolution
-        tube_resolution = self._geometry.tube_resolution
+        scalar = self.geometry.scalar
+        body_radius = self.geometry.tube_radius
+        head_length_frac = self.geometry.head_length_frac
+        head_radius_frac = self.geometry.head_radius_frac
+        head_radial_res = self.geometry.head_radial_resolution
+        tube_resolution = self.geometry.tube_resolution
 
         # Create polydata with all trajectory lines
         polydata = self._create_trajectory_polydata(trajectory_data_list, scalar)
@@ -765,7 +717,7 @@ class TrajectorySpec(VarSpec):
         kwargs = super().get_pyvista_kwargs()
 
         # Handle silhouettes
-        if self._appearance.silhouettes:
+        if self.appearance.silhouettes:
             kwargs["silhouette"] = True
 
         return kwargs

@@ -116,8 +116,8 @@ def make_contour(
         material_preset=material_preset,
     )
     return ContourSpec(
-        _geometry=geometry,
-        _appearance=appearance,
+        geometry=geometry,
+        appearance=appearance,
         name=name,
         empty_ok=empty_ok,
         **kwargs,
@@ -183,8 +183,8 @@ def make_volume(
         material_preset=material_preset,
     )
     return VolumeSpec(
-        _geometry=geometry,
-        _appearance=appearance,
+        geometry=geometry,
+        appearance=appearance,
         name=name,
         empty_ok=empty_ok,
         **kwargs,
@@ -256,8 +256,8 @@ def make_vectors(
         glyph_type=glyph_type,
     )
     return VectorSpec(
-        _geometry=geometry,
-        _appearance=appearance,
+        geometry=geometry,
+        appearance=appearance,
         name=name,
         empty_ok=empty_ok,
         **kwargs,
@@ -320,8 +320,8 @@ def make_slice(
         scalar_bar_title=scalar_bar_title or varname,
     )
     return SliceSpec(
-        _geometry=geometry,
-        _appearance=appearance,
+        geometry=geometry,
+        appearance=appearance,
         name=name,
         empty_ok=empty_ok,
         **kwargs,
@@ -402,8 +402,8 @@ def make_trajectory(
         material_preset=material_preset,
     )
     return TrajectorySpec(
-        _geometry=geometry,
-        _appearance=appearance,
+        geometry=geometry,
+        appearance=appearance,
         limit=limit,
         name=name,
         empty_ok=empty_ok,
