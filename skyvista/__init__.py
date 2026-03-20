@@ -120,14 +120,6 @@ from . import presets
 # Example data loader
 from .examples import load_example_storm_data
 
-# Trajectory mesh creation utilities
-from .trajectories import (
-    create_trajectory_polydata,
-    create_tetrahedron_head,
-    create_trajectory_mesh,
-    generate_trajectory_mesh,
-)
-
 # Camera utilities
 from .camera import (
     calculate_camera_offset,
@@ -207,11 +199,6 @@ __all__ = [
     "PVMesh",
     "presets",
     "load_example_storm_data",
-    # Trajectory utilities
-    "create_trajectory_polydata",
-    "create_tetrahedron_head",
-    "create_trajectory_mesh",
-    "generate_trajectory_mesh",
     # Camera utilities
     "calculate_camera_offset",
     "get_trajectory_camera",

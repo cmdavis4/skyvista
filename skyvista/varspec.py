@@ -451,6 +451,7 @@ class TrajectorySpec(VarSpec):
     Lagrangian trajectory visualization specification.
 
     Creates tube or particle visualizations from trajectory data.
+    All trajectory mesh creation logic is encapsulated within this class.
     """
 
     _geometry: TrajectoryGeometry = field(default_factory=TrajectoryGeometry)
@@ -472,6 +473,7 @@ class TrajectorySpec(VarSpec):
             self.name = f"trajectory_{style}{scalar_part}"
 
     def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
+        """Create trajectory mesh from dataset."""
         # Trajectories use all times up to current time
         if time is not None and "time" in ds.dims:
             ds = ds.sel(time=slice(None, time))
@@ -494,39 +496,22 @@ class TrajectorySpec(VarSpec):
         if "time" in ds.dims and len(ds["time"]) < 2:
             return pv.PolyData()
 
-        # Import and use existing trajectory mesh generation
-        from .trajectories import create_trajectory_mesh
+        # Handle particle style
+        if self._appearance.style == "particle":
+            return self._create_particle_mesh(ds, trajectory_dim)
 
-        # Extract trajectory data
+        # Extract trajectory data for tube rendering
         trajectories_points_data = self._extract_trajectory_data(ds, trajectory_dim)
 
         if not trajectories_points_data:
             return pv.PolyData()
 
-        # Handle particle style
-        if self._appearance.style == "particle":
-            return self._create_particle_mesh(ds, trajectory_dim)
-
-        # Create tube mesh
-        arrow_color_scalar = self._geometry.scalar
-        trajectory_arrow_kwargs = {
-            "body_radius": self._geometry.tube_radius,
-            "head_length_frac": self._geometry.head_length_frac,
-            "head_radius_frac": self._geometry.head_radius_frac,
-            "head_radial_res": self._geometry.head_radial_resolution,
-            "tube_resolution": self._geometry.tube_resolution,
-        }
-
-        mesh = create_trajectory_mesh(
-            trajectories_points_data,
-            arrow_color_scalar=arrow_color_scalar,
-            create_mesh_kwargs=self.pyvista_create_kwargs,
-            **trajectory_arrow_kwargs,
-        )
+        # Create tube mesh with arrow heads
+        mesh = self._create_tube_mesh(trajectories_points_data)
 
         # Store scalar info
-        if arrow_color_scalar:
-            mesh.field_data["arrow_color_scalar"] = arrow_color_scalar
+        if self._geometry.scalar:
+            mesh.field_data["arrow_color_scalar"] = self._geometry.scalar
 
         return mesh
 
@@ -537,7 +522,7 @@ class TrajectorySpec(VarSpec):
         from carlee_tools import maybe_cast_to_float
 
         trajectories_points_data = []
-        arrow_color_scalar = self._geometry.scalar
+        scalar = self._geometry.scalar
 
         x_data = ds["x"].values
         y_data = ds["y"].values
@@ -545,9 +530,9 @@ class TrajectorySpec(VarSpec):
         trajectory_indices = ds[trajectory_dim].values
 
         # Pre-extract scalar data if needed
-        arrow_color_scalar_data = None
-        if arrow_color_scalar and arrow_color_scalar in ds:
-            arrow_color_scalar_data = maybe_cast_to_float(ds[arrow_color_scalar].values)
+        scalar_data = None
+        if scalar and scalar in ds:
+            scalar_data = maybe_cast_to_float(ds[scalar].values)
 
         for i, trajectory_ix in enumerate(trajectory_indices):
             xyz_points = np.column_stack([x_data[i], y_data[i], z_data[i]])
@@ -564,14 +549,12 @@ class TrajectorySpec(VarSpec):
             }
 
             # Add scalar data
-            if arrow_color_scalar and arrow_color_scalar_data is not None:
-                if len(arrow_color_scalar_data.shape) > 1:
-                    trajectory_points_data[arrow_color_scalar] = (
-                        arrow_color_scalar_data[i][valid_mask]
-                    )
+            if scalar and scalar_data is not None:
+                if len(scalar_data.shape) > 1:
+                    trajectory_points_data[scalar] = scalar_data[i][valid_mask]
                 else:
-                    trajectory_points_data[arrow_color_scalar] = np.full(
-                        len(valid_points), arrow_color_scalar_data[i]
+                    trajectory_points_data[scalar] = np.full(
+                        len(valid_points), scalar_data[i]
                     )
 
             trajectories_points_data.append(trajectory_points_data)
@@ -611,6 +594,172 @@ class TrajectorySpec(VarSpec):
         glyph_kwargs.update(self.pyvista_create_kwargs)
 
         return point_mesh.glyph(**glyph_kwargs)
+
+    def _create_tube_mesh(
+        self, trajectory_data_list: List[Dict[str, Any]]
+    ) -> pv.PolyData:
+        """
+        Create tube mesh with arrow heads from trajectory point data.
+
+        Args:
+            trajectory_data_list: List of dicts with 'points' and optional scalar data.
+
+        Returns:
+            Single merged mesh with tubes and cone arrow heads.
+        """
+        if not trajectory_data_list:
+            return pv.PolyData()
+
+        scalar = self._geometry.scalar
+        body_radius = self._geometry.tube_radius
+        head_length_frac = self._geometry.head_length_frac
+        head_radius_frac = self._geometry.head_radius_frac
+        head_radial_res = self._geometry.head_radial_resolution
+        tube_resolution = self._geometry.tube_resolution
+
+        # Create polydata with all trajectory lines
+        polydata = self._create_trajectory_polydata(trajectory_data_list, scalar)
+
+        # Convert to tubes
+        tube_mesh = polydata.tube(
+            radius=body_radius, n_sides=tube_resolution, capping=False
+        )
+
+        # Create arrow heads
+        head_meshes = []
+        head_length = body_radius * head_length_frac
+
+        for traj_data in trajectory_data_list:
+            points = traj_data["points"]
+            if len(points) < 2:
+                continue
+
+            # Calculate head direction and position
+            dhead = points[-1] - points[-2]
+            dhead_norm = np.linalg.norm(dhead)
+            if dhead_norm > 0:
+                dhead = dhead / dhead_norm
+                head_center = points[-1] + dhead * (head_length / 2)
+
+                head = pv.Cone(
+                    center=head_center,
+                    direction=dhead,
+                    height=head_length,
+                    radius=head_radius_frac * body_radius,
+                    resolution=head_radial_res,
+                )
+
+                # Add scalar data to head if present
+                if scalar and scalar in traj_data:
+                    head[scalar] = np.full(head.n_cells, traj_data[scalar][-1])
+
+                head_meshes.append(head)
+
+        # Merge tubes and heads
+        meshes_to_merge = [tube_mesh]
+        if head_meshes:
+            if len(head_meshes) == 1:
+                heads_mesh = head_meshes[0]
+            else:
+                heads_mesh = head_meshes[0].merge(head_meshes[1:], merge_points=False)
+            meshes_to_merge.append(heads_mesh)
+
+        if len(meshes_to_merge) == 1:
+            final_mesh = meshes_to_merge[0]
+        else:
+            final_mesh = meshes_to_merge[0].merge(
+                meshes_to_merge[1:], merge_points=False
+            )
+
+        # Ensure scalar is in point_data
+        if scalar and scalar in final_mesh.array_names:
+            final_mesh.point_data[scalar] = final_mesh[scalar]
+
+        return final_mesh
+
+    @staticmethod
+    def _create_trajectory_polydata(
+        trajectory_data_list: List[Dict[str, Any]],
+        scalar: Optional[str] = None,
+    ) -> pv.PolyData:
+        """
+        Create PolyData with multiple trajectories as line cells.
+
+        Args:
+            trajectory_data_list: List of dicts with 'points' arrays.
+            scalar: Optional scalar field name for coloring.
+
+        Returns:
+            PolyData with all trajectories as separate line cells.
+        """
+        if not trajectory_data_list:
+            return pv.PolyData()
+
+        total_points = sum(len(t["points"]) for t in trajectory_data_list)
+        all_points = np.zeros((total_points, 3))
+        all_lines = []
+        all_scalars = [] if scalar else None
+
+        point_offset = 0
+        for traj_data in trajectory_data_list:
+            points = traj_data["points"]
+            n_points = len(points)
+
+            all_points[point_offset : point_offset + n_points] = points
+
+            # Line connectivity: [n_points, idx_0, idx_1, ..., idx_n-1]
+            line_connectivity = [n_points] + list(
+                range(point_offset, point_offset + n_points)
+            )
+            all_lines.extend(line_connectivity)
+
+            if scalar and scalar in traj_data:
+                all_scalars.extend(traj_data[scalar])
+
+            point_offset += n_points
+
+        mesh = pv.PolyData(all_points, lines=np.array(all_lines, dtype=np.int_))
+        if scalar and all_scalars:
+            mesh[scalar] = np.array(all_scalars)
+
+        return mesh
+
+    @staticmethod
+    def _create_tetrahedron_head(
+        base_center: np.ndarray, tip: np.ndarray, radius: float
+    ) -> pv.PolyData:
+        """
+        Create tetrahedron arrow head (alternative to cone).
+
+        Args:
+            base_center: Center point of tetrahedron base.
+            tip: Tip point of arrow head.
+            radius: Radius of base.
+
+        Returns:
+            Tetrahedron mesh.
+        """
+        angles = np.linspace(0, 2 * np.pi, 7)[:-1]
+        base_points = []
+
+        for angle in angles:
+            x = base_center[0] + radius * np.cos(angle)
+            y = base_center[1] + radius * np.sin(angle)
+            z = base_center[2]
+            base_points.append([x, y, z])
+
+        points = np.array(base_points + [list(tip)])
+
+        head = pv.PolyData()
+        head.points = points
+        faces = np.array([
+            3, 0, 1, 2,  # Base
+            3, 0, 3, 1,  # Side 1
+            3, 1, 3, 2,  # Side 2
+            3, 2, 3, 0,  # Side 3
+        ])
+        head.faces = faces
+        return head
 
     def get_pyvista_kwargs(self) -> Dict[str, Any]:
         kwargs = super().get_pyvista_kwargs()

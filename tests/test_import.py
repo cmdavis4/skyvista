@@ -96,14 +96,14 @@ def test_camera_functions_available():
     assert hasattr(sv, 'camera_follow_callback')
 
 
-def test_trajectory_functions_available():
-    """Test that trajectory functions are accessible"""
-    import skyvista as sv
+def test_trajectory_spec_has_mesh_methods():
+    """Test that TrajectorySpec has the mesh creation methods"""
+    from skyvista import TrajectorySpec
 
-    assert hasattr(sv, 'create_trajectory_polydata')
-    assert hasattr(sv, 'create_tetrahedron_head')
-    assert hasattr(sv, 'create_trajectory_mesh')
-    assert hasattr(sv, 'generate_trajectory_mesh')
+    # Trajectory mesh methods are now part of TrajectorySpec class
+    assert hasattr(TrajectorySpec, '_create_trajectory_polydata')
+    assert hasattr(TrajectorySpec, '_create_tetrahedron_head')
+    assert hasattr(TrajectorySpec, '_create_tube_mesh')
 
 
 def test_blender_functions_available():
