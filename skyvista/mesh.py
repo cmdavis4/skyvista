@@ -1,8 +1,8 @@
 """
-Core type definitions for skyvista.
+Mesh container for skyvista.
 
-This module contains the PVMesh dataclass used throughout skyvista
-for mesh-varspec pairing.
+This module contains the PVMesh dataclass that pairs a PyVista mesh
+with its VarSpec and rendering metadata.
 """
 
 import datetime as dt

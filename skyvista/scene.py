@@ -24,7 +24,7 @@ from .varspec import (
     VectorSpec,
     VolumeSpec,
 )
-from .types_sv import PVMesh
+from .mesh import PVMesh
 
 
 @dataclass

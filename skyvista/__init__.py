@@ -114,7 +114,7 @@ from .grid_utils import normalize_dimension_order
 # =============================================================================
 
 from .plotter import initialize_plotter
-from .types_sv import PVMesh
+from .mesh import PVMesh
 from . import presets
 
 # Example data loader

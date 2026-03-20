@@ -1,7 +1,7 @@
 from tqdm.notebook import tqdm
 from pathlib import Path
 
-from ..types_sv import PVMesh
+from ..mesh import PVMesh
 
 
 def export_meshes_to_blender(meshes: list[PVMesh], out_dir):

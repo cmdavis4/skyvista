@@ -40,7 +40,7 @@ from skyvista.appearance import (
     VectorAppearance,
     TrajectoryAppearance,
 )
-from skyvista.types_sv import PVMesh
+from skyvista.mesh import PVMesh
 
 
 # =============================================================================

@@ -44,7 +44,7 @@ from .grid_utils import (
 from .grids import get_grid_builder
 
 if TYPE_CHECKING:
-    from .types_sv import PVMesh
+    from .mesh import PVMesh
 
 
 @dataclass
@@ -134,7 +134,7 @@ class VarSpec(ABC):
         Returns:
             PVMesh object with mesh and actor, or None if skipped
         """
-        from .types_sv import PVMesh
+        from .mesh import PVMesh
 
         mesh = self.create_mesh(ds, time)
 
