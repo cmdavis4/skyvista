@@ -9,6 +9,7 @@ platforms = ["linux-64", "osx-64", "osx-arm64"]
 # Testing tools
 pytest = ">=7.0"
 pytest-cov = "*"
+nbmake = "*"
 
 [feature.dev.dependencies]
 # Development tools
@@ -34,7 +35,7 @@ dev = {features = ["test", "dev"], solve-group = "dev"}
 install = "pip install -e ."
 
 # Run all tests
-test = {cmd = "pytest tests/ -v", depends-on = ["install"]}
+test = {cmd = "./tests/run_tests.sh", depends-on = ["install"]}
 
 # Run tests with coverage
 test-cov = {cmd = "pytest tests/ -v --cov=skyvista --cov-report=term-missing --cov-report=html", depends-on = ["install"]}

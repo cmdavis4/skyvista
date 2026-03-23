@@ -87,7 +87,7 @@ class SliceGeometry(Geometry):
 
     varname: str
     slice_dim: str = "z"
-    slice_value: Optional[float] = None
+    slice_value: Optional[float] = 0
     slice_method: str = "nearest"
 
 

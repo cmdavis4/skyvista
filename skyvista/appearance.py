@@ -31,7 +31,7 @@ class Appearance:
     opacity: float = 1.0
     cmap: Optional[str] = None
     clim: Optional[Tuple[float, float]] = None
-    show_scalar_bar: bool = False
+    show_scalar_bar: bool = True
     scalar_bar_title: Optional[str] = None
 
     def to_pyvista_kwargs(self) -> Dict[str, Any]:

@@ -42,7 +42,6 @@ from skyvista.appearance import (
 )
 from skyvista.mesh import PVMesh
 
-
 # =============================================================================
 # FIXTURES
 # =============================================================================
@@ -389,7 +388,9 @@ class TestGeometry:
 
     def test_vector_geometry(self):
         """Test VectorGeometry creation."""
-        geom = VectorGeometry(varname="wind", u_varname="UC", v_varname="VC", w_varname="WC")
+        geom = VectorGeometry(
+            varname="wind", u_varname="UC", v_varname="VC", w_varname="WC"
+        )
         assert geom.varname == "wind"
         assert geom.u_varname == "UC"
 
@@ -487,7 +488,9 @@ class TestConvenienceFunctions:
     def test_plot_trajectories_creates_scene(self, sample_trajectory_ds):
         """Test plot_trajectories creates a scene."""
         with patch.object(Scene, "show"):
-            scene = plot_trajectories(sample_trajectory_ds, scalar="altitude", show=True)
+            scene = plot_trajectories(
+                sample_trajectory_ds, scalar="altitude", show=True
+            )
         assert isinstance(scene, Scene)
         assert len(scene._specs) == 1
 

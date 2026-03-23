@@ -510,6 +510,23 @@ class GridBuilder(ABC):
         """
         ...
 
+    @abstractmethod
+    def get_expected_dims(self, ds: xr.Dataset) -> Optional[Tuple[str, ...]]:
+        """
+        Get the expected dimension order for data variables.
+
+        This is used to automatically transpose data to match the mesh point
+        ordering created by build_mesh().
+
+        Args:
+            ds: xarray Dataset
+
+        Returns:
+            Tuple of dimension names in expected order, or None if no
+            reordering is needed (e.g., for unstructured grids)
+        """
+        ...
+
     def add_scalar(
         self,
         mesh: pv.DataSet,
@@ -519,12 +536,23 @@ class GridBuilder(ABC):
         """
         Add scalar data from dataset to mesh (in-place).
 
+        Automatically transposes data to match expected dimension order.
+
         Args:
             mesh: PyVista mesh to add data to
             ds: xarray Dataset containing the variable
             varname: Name of variable to add
         """
-        mesh[varname] = ds[varname].values.ravel(order="F")
+        data = ds[varname]
+
+        # Get expected dimension order and transpose if needed
+        expected_dims = self.get_expected_dims(ds)
+        if expected_dims is not None:
+            # Only include dimensions that exist in the data
+            dims_to_use = [d for d in expected_dims if d in data.dims]
+            data = data.transpose(*dims_to_use)
+
+        mesh[varname] = data.values.ravel(order="F")
 
 
 # =============================================================================
@@ -556,6 +584,10 @@ class RectilinearGridBuilder(GridBuilder):
     @property
     def grid_type(self) -> str:
         return "rectilinear"
+
+    def get_expected_dims(self, ds: xr.Dataset) -> Optional[Tuple[str, ...]]:
+        """Return expected dimension order (x, y, z)."""
+        return (self.x_coord, self.y_coord, self.z_coord)
 
     def build_mesh(
         self,
@@ -647,6 +679,10 @@ class CurvilinearGridBuilder(GridBuilder):
     @property
     def grid_type(self) -> str:
         return "curvilinear"
+
+    def get_expected_dims(self, ds: xr.Dataset) -> Optional[Tuple[str, ...]]:
+        """Return expected dimension order from dims attribute."""
+        return self.dims
 
     def build_mesh(
         self,
@@ -758,6 +794,10 @@ class UnstructuredGridBuilder(GridBuilder):
     @property
     def grid_type(self) -> str:
         return "unstructured"
+
+    def get_expected_dims(self, ds: xr.Dataset) -> Optional[Tuple[str, ...]]:
+        """Unstructured grids have no specific dimension order requirement."""
+        return None
 
     def build_mesh(
         self,
@@ -877,6 +917,10 @@ class GeographicGridBuilder(GridBuilder):
     @property
     def grid_type(self) -> str:
         return "geographic"
+
+    def get_expected_dims(self, ds: xr.Dataset) -> Optional[Tuple[str, ...]]:
+        """Return expected dimension order (lon, lat, alt)."""
+        return (self.lon_coord, self.lat_coord, self.alt_coord)
 
     def _to_cartesian(
         self,
@@ -1064,6 +1108,10 @@ class SphericalGridBuilder(GridBuilder):
     @property
     def grid_type(self) -> str:
         return "spherical"
+
+    def get_expected_dims(self, ds: xr.Dataset) -> Optional[Tuple[str, ...]]:
+        """Return expected dimension order (range, azimuth, elevation)."""
+        return (self.range_coord, self.azimuth_coord, self.elevation_coord)
 
     def _to_cartesian(
         self,

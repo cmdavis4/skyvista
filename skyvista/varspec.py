@@ -199,9 +199,7 @@ class VolumeSpec(VarSpec):
     Renders scalar field data as a 3D volume with opacity transfer function.
     """
 
-    geometry: VolumeGeometry = field(
-        default_factory=lambda: VolumeGeometry(varname="")
-    )
+    geometry: VolumeGeometry = field(default_factory=lambda: VolumeGeometry(varname=""))
     appearance: VolumeAppearance = field(default_factory=VolumeAppearance)
 
     def __post_init__(self):
@@ -248,9 +246,7 @@ class VectorSpec(VarSpec):
     Creates arrow glyphs from vector field data.
     """
 
-    geometry: VectorGeometry = field(
-        default_factory=lambda: VectorGeometry(varname="")
-    )
+    geometry: VectorGeometry = field(default_factory=lambda: VectorGeometry(varname=""))
     appearance: VectorAppearance = field(default_factory=VectorAppearance)
 
     def __post_init__(self):
@@ -695,10 +691,22 @@ class TrajectorySpec(VarSpec):
         head = pv.PolyData()
         head.points = points
         faces = np.array([
-            3, 0, 1, 2,  # Base
-            3, 0, 3, 1,  # Side 1
-            3, 1, 3, 2,  # Side 2
-            3, 2, 3, 0,  # Side 3
+            3,
+            0,
+            1,
+            2,  # Base
+            3,
+            0,
+            3,
+            1,  # Side 1
+            3,
+            1,
+            3,
+            2,  # Side 2
+            3,
+            2,
+            3,
+            0,  # Side 3
         ])
         head.faces = faces
         return head
