@@ -108,9 +108,15 @@ class Scene:
                 try:
                     builder = get_grid_builder(ds)
                     self._bounds_meshes[ds_id] = builder.create_bounds_mesh(ds)
-                except ValueError:
-                    # Coordinate resolution failed - skip bounds for this dataset
-                    pass
+                except ValueError as e:
+                    import warnings
+
+                    warnings.warn(
+                        f"Could not create bounds mesh for dataset: {e}\n"
+                        "Scene bounds may not fully enclose the data. "
+                        "Set force_bounds=False to suppress this warning.",
+                        stacklevel=2,
+                    )
 
         return self
 

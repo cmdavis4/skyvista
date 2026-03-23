@@ -507,11 +507,13 @@ class TrajectorySpec(VarSpec):
         if "time" in ds.dims:
             ds = ds.isel(time=-1)
 
-        points = np.column_stack([
-            ds["x"].values,
-            ds["y"].values,
-            ds["z"].values,
-        ])
+        points = np.column_stack(
+            [
+                ds["x"].values,
+                ds["y"].values,
+                ds["z"].values,
+            ]
+        )
 
         valid_mask = ~np.isnan(points).any(axis=1)
         points = points[valid_mask]
@@ -690,24 +692,26 @@ class TrajectorySpec(VarSpec):
 
         head = pv.PolyData()
         head.points = points
-        faces = np.array([
-            3,
-            0,
-            1,
-            2,  # Base
-            3,
-            0,
-            3,
-            1,  # Side 1
-            3,
-            1,
-            3,
-            2,  # Side 2
-            3,
-            2,
-            3,
-            0,  # Side 3
-        ])
+        faces = np.array(
+            [
+                3,
+                0,
+                1,
+                2,  # Base
+                3,
+                0,
+                3,
+                1,  # Side 1
+                3,
+                1,
+                3,
+                2,  # Side 2
+                3,
+                2,
+                3,
+                0,  # Side 3
+            ]
+        )
         head.faces = faces
         return head
 

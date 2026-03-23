@@ -14,19 +14,25 @@ def calculate_camera_offset(camera_position, storm_position_ds):
     """
     current_position = camera_position[0]
     current_fp = camera_position[1]
-    return np.vstack([
-        np.array([
-            current_position[0] - storm_position_ds["storm_position_x"].values,
-            current_position[1] - storm_position_ds["storm_position_y"].values,
-            0,
-        ]),
-        np.array([
-            current_fp[0] - storm_position_ds["storm_position_x"].values,
-            current_fp[1] - storm_position_ds["storm_position_y"].values,
-            0,
-        ]),
-        np.array([0, 0, 0]),
-    ])
+    return np.vstack(
+        [
+            np.array(
+                [
+                    current_position[0] - storm_position_ds["storm_position_x"].values,
+                    current_position[1] - storm_position_ds["storm_position_y"].values,
+                    0,
+                ]
+            ),
+            np.array(
+                [
+                    current_fp[0] - storm_position_ds["storm_position_x"].values,
+                    current_fp[1] - storm_position_ds["storm_position_y"].values,
+                    0,
+                ]
+            ),
+            np.array([0, 0, 0]),
+        ]
+    )
 
 
 def get_trajectory_camera(plotter, position, direction, distance=2000):
@@ -73,27 +79,29 @@ def camera_follow_callback(camera_offsets):
             plotter.subplot(row, col)
             # Set camera to follow storm position
             plotter.camera_position = (
-                np.array([
+                np.array(
                     [
-                        simulation_ds.sel({"time": current_time})[
-                            "storm_position_x"
-                        ].values,
-                        simulation_ds.sel({"time": current_time})[
-                            "storm_position_y"
-                        ].values,
-                        plotter.camera_position[0][2],
-                    ],
-                    [
-                        simulation_ds.sel({"time": current_time})[
-                            "storm_position_x"
-                        ].values,
-                        simulation_ds.sel({"time": current_time})[
-                            "storm_position_y"
-                        ].values,
-                        plotter.camera_position[1][2],
-                    ],
-                    plotter.camera_position[2],
-                ])
+                        [
+                            simulation_ds.sel({"time": current_time})[
+                                "storm_position_x"
+                            ].values,
+                            simulation_ds.sel({"time": current_time})[
+                                "storm_position_y"
+                            ].values,
+                            plotter.camera_position[0][2],
+                        ],
+                        [
+                            simulation_ds.sel({"time": current_time})[
+                                "storm_position_x"
+                            ].values,
+                            simulation_ds.sel({"time": current_time})[
+                                "storm_position_y"
+                            ].values,
+                            plotter.camera_position[1][2],
+                        ],
+                        plotter.camera_position[2],
+                    ]
+                )
                 + camera_offset
             )
 

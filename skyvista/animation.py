@@ -11,12 +11,14 @@ class FPS:
         total_wall_seconds=None,
         raise_if_not_evenly_spaced=True,
     ) -> None:
-        if not any([
-            fps,
-            data_seconds_per_wall_second,
-            wall_seconds_per_data_second,
-            total_wall_seconds,
-        ]):
+        if not any(
+            [
+                fps,
+                data_seconds_per_wall_second,
+                wall_seconds_per_data_second,
+                total_wall_seconds,
+            ]
+        ):
             raise ValueError("Must pass one argument to FPS")
         self.passed_fps = fps
         self.data_seconds_per_wall_second = data_seconds_per_wall_second

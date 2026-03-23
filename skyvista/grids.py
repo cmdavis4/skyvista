@@ -364,7 +364,7 @@ def resolve_coordinate(ds: xr.Dataset, axis: str) -> str:
         f"    - Rename a coordinate to a recognized name "
         f"(e.g. {aliases[0]!r} for the {axis}-axis)\n"
         f"    - Add a CF-compliant axis attribute: "
-        f'ds[\"my_coord\"].attrs[\"axis\"] = \"{CF_AXIS_NAMES.get(axis, "?")}\"'
+        f'ds["my_coord"].attrs["axis"] = "{CF_AXIS_NAMES.get(axis, "?")}"'
     )
 
 
@@ -666,6 +666,16 @@ class GridBuilder(ABC):
                     f"  Expected dimensions: {expected_dims}\n"
                     f"  No dimensions overlap. The variable may belong to a "
                     f"different grid or coordinate system."
+                )
+
+            extra_dims = set(data.dims) - set(dims_to_use)
+            if extra_dims:
+                raise ValueError(
+                    f"Variable '{varname}' has extra dimensions "
+                    f"{sorted(extra_dims)} beyond what the {self.grid_type} "
+                    f"grid expects {tuple(dims_to_use)}.\n"
+                    f"  Select a specific index first, e.g.: "
+                    f"ds.isel({next(iter(extra_dims))}=0)"
                 )
 
             data = data.transpose(*dims_to_use)
@@ -1529,7 +1539,14 @@ def detect_grid_type(ds: xr.Dataset) -> GridBuilder:
         )
     elif _is_curvilinear(ds, coords):
         x_coord = ds[coords["x"]]
-        dims = x_coord.dims if x_coord.ndim > 1 else tuple(ds.sizes.keys())[:3]
+        z_coord = ds[coords["z"]]
+        if x_coord.ndim > 1:
+            # 2D/3D x coords: use their dims, plus z's dim if z is 1D
+            dims = x_coord.dims
+            if z_coord.ndim == 1 and z_coord.dims[0] not in dims:
+                dims = dims + z_coord.dims
+        else:
+            dims = tuple(ds.sizes.keys())[:3]
         return CurvilinearGridBuilder(
             x_coord=coords["x"],
             y_coord=coords["y"],
@@ -1613,7 +1630,13 @@ def get_grid_builder(
         )
     elif grid_type == "curvilinear":
         x_coord = ds[coords["x"]]
-        dims = x_coord.dims if x_coord.ndim > 1 else tuple(ds.sizes.keys())[:3]
+        z_coord = ds[coords["z"]]
+        if x_coord.ndim > 1:
+            dims = x_coord.dims
+            if z_coord.ndim == 1 and z_coord.dims[0] not in dims:
+                dims = dims + z_coord.dims
+        else:
+            dims = tuple(ds.sizes.keys())[:3]
         return CurvilinearGridBuilder(
             x_coord=coords["x"],
             y_coord=coords["y"],
