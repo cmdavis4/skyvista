@@ -1,28 +1,91 @@
 """
-Grid builders for different data types.
+Grid builders for converting xarray Datasets into PyVista meshes.
 
-This module provides the GridBuilder abstraction for handling different grid types
-(rectilinear, curvilinear, unstructured) uniformly. It also provides auto-detection
-of grid type using CF conventions and common coordinate name aliases.
+Overview
+--------
+Atmospheric data comes in many coordinate systems: regular Cartesian grids,
+lat/lon on a sphere, radar range/azimuth/elevation, curvilinear model output,
+and unstructured point clouds. This module provides a unified ``GridBuilder``
+interface that handles all of them, plus auto-detection so callers rarely need
+to specify which one to use.
 
-Primary API:
-    detect_grid_type(ds)    - Auto-detect grid type and return appropriate builder
-    get_grid_builder(ds)    - Get builder, with helpful error messages on failure
+How It Works (3-Step Flow)
+--------------------------
+1. **Coordinate Resolution** — Given an xarray Dataset, figure out which
+   variables correspond to which spatial axes. Resolution uses two strategies
+   in priority order:
 
-Grid Builders:
-    RectilinearGridBuilder  - Regular orthogonal grids (x, y, z coords)
-    CurvilinearGridBuilder  - Non-orthogonal structured grids (2D/3D coord arrays)
-    UnstructuredGridBuilder - Point clouds and unstructured meshes
+   a. *CF Conventions*: look for ``axis`` attributes (``"X"``, ``"Y"``,
+      ``"Z"``) and ``standard_name`` attributes (e.g. ``"longitude"``).
+   b. *Alias matching*: fall back to common naming patterns defined in
+      ``COORD_ALIASES`` (e.g. ``"lon"``, ``"lat"``, ``"altitude"``).
 
-Coordinate Detection:
-    Coordinates are detected using:
-    1. CF Conventions axis attributes (standard_name, axis)
-    2. COORD_ALIASES fallback (common naming patterns)
+   For spherical/radar data, a separate set of aliases in
+   ``SPHERICAL_COORD_NAMES`` is checked (e.g. ``"range"``, ``"azimuth"``).
 
-Example:
-    >>> builder = detect_grid_type(ds)
-    >>> mesh = builder.build_mesh(ds, "temperature")
-    >>> bounds = builder.create_bounds_mesh(ds)
+   The main entry points are ``resolve_coordinate()`` (single axis) and
+   ``resolve_coordinates()`` (multiple axes at once).
+
+2. **Grid Type Detection** — ``detect_grid_type(ds)`` inspects the resolved
+   coordinates to choose the right builder, in this priority order:
+
+   - **Spherical** — dataset has range + azimuth + elevation coordinates
+     (e.g. weather radar). Uses ``SphericalGridBuilder``.
+   - **Geographic** — dataset has lat/lon coordinates. Uses
+     ``GeographicGridBuilder`` (projects onto a sphere).
+   - **Rectilinear** — all spatial coordinates are 1D arrays on a regular
+     Cartesian grid. Uses ``RectilinearGridBuilder``.
+   - **Curvilinear** — spatial coordinates are 2D or 3D arrays (e.g. WRF
+     model output). Uses ``CurvilinearGridBuilder``.
+   - **Unstructured** — fallback for point clouds. Uses
+     ``UnstructuredGridBuilder``.
+
+   You can also skip auto-detection by passing an explicit ``grid_type``
+   string to ``get_grid_builder(ds, grid_type="rectilinear")``.
+
+3. **Mesh Building** — ``builder.build_mesh(ds, varname)`` converts the
+   coordinate arrays into a PyVista mesh and (optionally) maps a data
+   variable onto it. Internally:
+
+   a. Coordinate arrays are extracted, broadcast to matching shapes, and
+      (for geographic/spherical grids) converted to Cartesian XYZ.
+   b. A PyVista mesh is constructed (``RectilinearGrid``, ``StructuredGrid``,
+      etc.).
+   c. If ``varname`` is provided, ``add_scalar()`` transposes the data
+      variable to match the mesh's point ordering (using
+      ``get_expected_dims()``) and attaches it as scalar data.
+
+Primary API
+-----------
+- ``detect_grid_type(ds)``  — auto-detect and return the appropriate builder
+- ``get_grid_builder(ds)``  — same, but accepts an optional explicit grid_type
+
+Grid Builders
+-------------
+- ``RectilinearGridBuilder``  — regular orthogonal Cartesian grids
+- ``CurvilinearGridBuilder``  — structured grids with 2D/3D coordinate arrays
+- ``UnstructuredGridBuilder`` — point clouds and unstructured meshes
+- ``GeographicGridBuilder``   — lat/lon data projected onto a sphere
+- ``SphericalGridBuilder``    — radar-style range/azimuth/elevation data
+
+Examples
+--------
+Auto-detect and build a mesh::
+
+    builder = detect_grid_type(ds)
+    mesh = builder.build_mesh(ds, "temperature")
+
+Explicit grid type::
+
+    builder = get_grid_builder(ds, grid_type="geographic")
+    mesh = builder.build_mesh(ds, "temperature")
+
+Typical Scene-level usage (detection happens internally)::
+
+    import skyvista as sv
+    scene = sv.Scene()
+    scene.add_contour(ds, "THETA", isosurfaces=[300, 310])
+    scene.show()
 """
 
 from abc import ABC, abstractmethod
@@ -284,15 +347,24 @@ def resolve_coordinate(ds: xr.Dataset, axis: str) -> str:
     # Build helpful error message
     aliases = COORD_ALIASES.get(axis, [])
     available = sorted(set(ds.coords.keys()) | set(ds.sizes.keys()))
+    example_names = ", ".join(f"'{a}'" for a in aliases[:6])
+    if len(aliases) > 6:
+        example_names += ", ..."
 
     raise ValueError(
-        f"Could not find '{axis}' coordinate in dataset.\n"
-        f"  Looked for CF axis='{CF_AXIS_NAMES.get(axis, '?')}' or "
-        f"standard_name in {CF_STANDARD_NAMES.get(axis, [])}\n"
-        f"  Also checked aliases: {aliases[:5]}{'...' if len(aliases) > 5 else ''}\n"
-        f"  Available coordinates/dimensions: {available}\n"
-        "  To fix: either add CF-compliant attributes to your coordinates,\n"
-        "  or rename coordinates to match common patterns."
+        f"Could not find a coordinate for the {axis}-axis in the dataset.\n"
+        f"  Skyvista needs to identify which coordinate corresponds to the "
+        f"{axis}-axis. It tried:\n"
+        f"    1. CF conventions: looked for axis='{CF_AXIS_NAMES.get(axis, '?')}' "
+        f"attribute or standard_name in {CF_STANDARD_NAMES.get(axis, [])}\n"
+        f"    2. Common name patterns: {example_names}\n"
+        f"  None of these matched the dataset's coordinates/dimensions: "
+        f"{available}\n"
+        f"  To fix, either:\n"
+        f"    - Rename a coordinate to a recognized name "
+        f"(e.g. {aliases[0]!r} for the {axis}-axis)\n"
+        f"    - Add a CF-compliant axis attribute: "
+        f'ds[\"my_coord\"].attrs[\"axis\"] = \"{CF_AXIS_NAMES.get(axis, "?")}\"'
     )
 
 
@@ -464,11 +536,29 @@ class GridBuilder(ABC):
     """
     Abstract base class for grid builders.
 
-    Grid builders know how to:
-    1. Build a PyVista mesh from an xarray Dataset
-    2. Create a bounds mesh (wireframe box) for the data domain
+    A GridBuilder converts an xarray Dataset into a PyVista mesh. Each
+    subclass handles a specific coordinate system (Cartesian, lat/lon,
+    radar spherical, etc.).
 
-    Subclasses implement specific grid types (rectilinear, curvilinear, etc.)
+    Subclass contract
+    -----------------
+    Subclasses must implement:
+
+    - ``grid_type`` (property) — human-readable name like ``"rectilinear"``.
+    - ``build_mesh(ds, varname)`` — construct a PyVista mesh from the
+      dataset's coordinates, optionally attaching ``varname`` as scalar data.
+    - ``create_bounds_mesh(ds)`` — lightweight wireframe at the data extent.
+    - ``get_expected_dims(ds)`` — return the dimension order that matches the
+      mesh's point ordering (used by ``add_scalar`` to transpose data before
+      raveling). Return ``None`` if no reordering is needed.
+
+    How ``add_scalar`` uses ``get_expected_dims``
+    ----------------------------------------------
+    PyVista structured grids store point data in Fortran (column-major) order.
+    To assign an xarray variable as mesh scalars, we must ensure the array's
+    dimension order matches the axis order used when the grid was constructed.
+    ``get_expected_dims()`` returns that canonical order so ``add_scalar()``
+    can transpose the data before calling ``ravel(order="F")``.
     """
 
     @property
@@ -536,21 +626,60 @@ class GridBuilder(ABC):
         """
         Add scalar data from dataset to mesh (in-place).
 
-        Automatically transposes data to match expected dimension order.
+        Transposes the data variable to match the dimension order that
+        ``build_mesh()`` used when constructing the grid, then flattens it
+        in Fortran order to align with PyVista's point indexing.
 
         Args:
             mesh: PyVista mesh to add data to
             ds: xarray Dataset containing the variable
             varname: Name of variable to add
+
+        Raises:
+            KeyError: If varname is not in the dataset
+            ValueError: If the data variable's dimensions don't overlap with
+                the expected dimension order from get_expected_dims()
         """
+        if varname not in ds:
+            available = sorted(ds.data_vars.keys())
+            raise KeyError(
+                f"Variable '{varname}' not found in dataset.\n"
+                f"  Available data variables: {available}"
+            )
+
         data = ds[varname]
 
-        # Get expected dimension order and transpose if needed
+        # Get expected dimension order and transpose if needed.
+        # get_expected_dims() returns the dimension order that matches
+        # the mesh's point ordering (e.g. ('x', 'y', 'z') for rectilinear,
+        # or ('range', 'volume_scan', 'time') for multi-dim spherical).
         expected_dims = self.get_expected_dims(ds)
         if expected_dims is not None:
             # Only include dimensions that exist in the data
             dims_to_use = [d for d in expected_dims if d in data.dims]
+
+            if not dims_to_use:
+                raise ValueError(
+                    f"Cannot map variable '{varname}' onto this "
+                    f"{self.grid_type} grid.\n"
+                    f"  Variable dimensions: {data.dims}\n"
+                    f"  Expected dimensions: {expected_dims}\n"
+                    f"  No dimensions overlap. The variable may belong to a "
+                    f"different grid or coordinate system."
+                )
+
             data = data.transpose(*dims_to_use)
+
+        n_values = data.values.size
+        n_points = mesh.n_points
+        if n_values != n_points:
+            raise ValueError(
+                f"Shape mismatch: variable '{varname}' has {n_values} values "
+                f"but the mesh has {n_points} points.\n"
+                f"  Variable shape (after transpose): {data.shape}\n"
+                f"  This usually means the variable has extra dimensions "
+                f"(e.g. 'time') that need to be selected first."
+            )
 
         mesh[varname] = data.values.ravel(order="F")
 
@@ -1111,6 +1240,12 @@ class SphericalGridBuilder(GridBuilder):
 
     def get_expected_dims(self, ds: xr.Dataset) -> Optional[Tuple[str, ...]]:
         """Return expected dimension order (range, azimuth, elevation)."""
+        # When azimuth/elevation are 2D coords (not dims), use the actual
+        # data dimensions in the order that matches the mesh construction:
+        # (range, *azimuth.dims)
+        if self.azimuth_coord not in ds.dims:
+            az_dims = ds[self.azimuth_coord].dims
+            return (self.range_coord,) + az_dims
         return (self.range_coord, self.azimuth_coord, self.elevation_coord)
 
     def _to_cartesian(
@@ -1248,9 +1383,24 @@ class SphericalGridBuilder(GridBuilder):
         """
         coords = resolve_spherical_coordinates(ds)
         if coords is None:
+            # Report which spherical coordinates were found and which are missing
+            found = {}
+            missing = []
+            for axis in ("range", "azimuth", "elevation"):
+                name = resolve_spherical_coordinate(ds, axis)
+                if name:
+                    found[axis] = name
+                else:
+                    aliases = SPHERICAL_COORD_NAMES[axis][:4]
+                    missing.append(f"{axis} (looked for: {', '.join(aliases)}, ...)")
+            available = sorted(set(ds.coords.keys()) | set(ds.sizes.keys()))
             raise ValueError(
-                "Could not resolve spherical coordinates. "
-                "Dataset must have range, azimuth, and elevation coordinates."
+                "Could not resolve spherical coordinates from this dataset.\n"
+                f"  Found: {found if found else 'none'}\n"
+                f"  Missing: {'; '.join(missing)}\n"
+                f"  Available coordinates/dimensions: {available}\n"
+                "  SphericalGridBuilder requires all three of: range, azimuth, "
+                "and elevation."
             )
 
         return cls(
@@ -1345,13 +1495,22 @@ def detect_grid_type(ds: xr.Dataset) -> GridBuilder:
     # Try to resolve Cartesian/geographic coordinates
     try:
         coords = resolve_coordinates(ds, ["x", "y", "z"])
-    except ValueError:
+    except ValueError as e:
+        available = sorted(set(ds.coords.keys()) | set(ds.sizes.keys()))
         raise ValueError(
-            "Could not detect grid type. Dataset must have either:\n"
-            "  - Cartesian coordinates (x, y, z or similar)\n"
-            "  - Geographic coordinates (lon, lat, altitude)\n"
-            "  - Spherical coordinates (range, azimuth, elevation)"
-        )
+            "Could not auto-detect grid type from the dataset's coordinates.\n"
+            f"  Available coordinates/dimensions: {available}\n"
+            "  Skyvista recognizes these coordinate systems:\n"
+            "    - Cartesian: coordinates named x/y/z (or similar, e.g. "
+            "XLONG/XLAT/height)\n"
+            "    - Geographic: coordinates named lon/lat/altitude (or similar)\n"
+            "    - Spherical/radar: coordinates named range/azimuth/elevation\n"
+            "  To fix, either rename your coordinates to match one of these\n"
+            "  patterns, add CF-compliant 'axis' attributes, or pass an "
+            "explicit\n"
+            "  grid_type to get_grid_builder().\n"
+            f"  (Underlying error: {e})"
+        ) from e
 
     # Check for geographic grid (lat/lon) - use GeographicGridBuilder
     if is_geographic_grid(ds, coords):
@@ -1420,9 +1579,22 @@ def get_grid_builder(
     if grid_type == "spherical":
         spherical_coords = resolve_spherical_coordinates(ds)
         if spherical_coords is None:
+            found = {}
+            missing = []
+            for axis in ("range", "azimuth", "elevation"):
+                name = resolve_spherical_coordinate(ds, axis)
+                if name:
+                    found[axis] = name
+                else:
+                    missing.append(axis)
+            available = sorted(set(ds.coords.keys()) | set(ds.sizes.keys()))
             raise ValueError(
-                "Cannot use 'spherical' grid type: dataset does not have "
-                "range, azimuth, and elevation coordinates."
+                f"Cannot use grid_type='spherical': missing {missing} "
+                f"coordinate(s).\n"
+                f"  Found: {found if found else 'none'}\n"
+                f"  Available coordinates/dimensions: {available}\n"
+                "  Spherical grids require range, azimuth, and elevation "
+                "coordinates (or recognized aliases like 'r', 'az', 'el')."
             )
         return SphericalGridBuilder(
             range_coord=spherical_coords["range"],

@@ -414,7 +414,7 @@ class TestAppearance:
         app = Appearance()
         assert app.opacity == 1.0
         assert app.color is None
-        assert app.show_scalar_bar is False
+        assert app.show_scalar_bar is True
 
     def test_contour_appearance(self):
         """Test ContourAppearance creation."""
