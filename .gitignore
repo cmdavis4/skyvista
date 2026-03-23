@@ -117,8 +117,17 @@ data/
 
 *scratch*
 
+# Local data files
+assets/data/
+
+# Publishing
+publish.sh
+
 # Claude
 CLAUDE.md
 .claude
+
+# Linter cache
+.ruff_cache/
 
 pyrightconfig.json
