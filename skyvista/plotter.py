@@ -6,7 +6,7 @@ import pyvista as pv
 def initialize_plotter(
     background: str = "#f8f6f1",
     add_axes: bool = True,
-    scale: dict = {"zscale": 3},
+    scale: dict = {},
     **kwargs: Any,
 ) -> pv.Plotter:
     """
