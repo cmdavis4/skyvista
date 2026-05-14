@@ -462,6 +462,8 @@ class TrajectorySpec(VarSpec):
         trajectories_points_data = []
         scalar = self.geometry.scalar
 
+        ds = ds.transpose(trajectory_dim, "time", ...)
+
         x_data = ds["x"].values
         y_data = ds["y"].values
         z_data = ds["z"].values

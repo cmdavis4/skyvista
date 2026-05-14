@@ -1,6 +1,6 @@
 [workspace]
 name = "skyvista"
-version = "1.0.0"
+version = "1.1.0"
 description = "PyVista-based 3D visualization for atmospheric data"
 channels = ["conda-forge"]
 platforms = ["linux-64", "osx-64", "osx-arm64"]
@@ -24,6 +24,9 @@ build = "*"
 twine = ">=6.2.0, <7"
 
 [environments]
+# Default environment - includes test feature so `pixi run test` works
+default = {features = ["test"], solve-group = "default"}
+
 # Minimal environment - core functionality
 minimal = {features = ["test", "minimal"], solve-group = "minimal"}
 

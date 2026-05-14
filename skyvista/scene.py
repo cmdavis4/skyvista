@@ -457,6 +457,11 @@ class Scene:
             result = spec.render_to_plotter(plotter, ds, time)
             if result is not None:
                 meshes.append(result)
+        # When camera_position is set manually before adding meshes, PyVista
+        # leaves the clipping range at its default (0.01, 1000.01), which
+        # clips out data at large coordinate scales (e.g. atmospheric data in
+        # meters). Recompute the range against the actual mesh bounds.
+        plotter.reset_camera_clipping_range()
         return meshes
 
     def _add_timestamp(self, plotter: pv.Plotter, time: Any) -> None:
@@ -503,7 +508,9 @@ class Scene:
         if self.title:
             plotter.add_text(self.title, position="upper_edge", name="title")
 
-        plotter.show()
+        # Keep the plotter alive so subsequent calls (animate, screenshot,
+        # additional show invocations) can reuse the cached plotter.
+        plotter.show(auto_close=False)
         return self
 
     def screenshot(
@@ -556,7 +563,7 @@ class Scene:
         """
         from tqdm.notebook import tqdm
 
-        plotter = self._build_plotter()
+        plotter = self.plotter
         times = times or self._get_all_times()
         # Rather than adding another parameter, assume we should warn if times
         # aren't evenly spaced
@@ -571,15 +578,18 @@ class Scene:
         # Convert our fps object to a number if needed
         if isinstance(fps, FPS):
             fps = fps.to_fps(times)
+
+        # PyVista needs the render pipeline initialized (via show) with the
+        # actors already added BEFORE open_gif. Otherwise written frames
+        # capture overlays (text, axes) but not the 3D actors.
+        self._render_frame(plotter, times[0])
+        self._add_timestamp(plotter, times[0])
+        plotter.show(auto_close=False)
         plotter.open_gif(str(path), fps=fps)
 
-        for i, t in enumerate(tqdm(times, desc="Rendering frames")):
+        for t in tqdm(times, desc="Rendering frames"):
             self._render_frame(plotter, t)
             self._add_timestamp(plotter, t)
-
-            if i == 0:
-                plotter.show(auto_close=False)
-
             plotter.write_frame()
 
         plotter.close()
