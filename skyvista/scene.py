@@ -56,7 +56,7 @@ class Scene:
     background: str = "#f8f6f1"
     title: Optional[str] = None
     show_grid: bool = True
-    force_bounds: bool = False
+    force_bounds: bool = True
 
     # Accumulated specs: list of (dataset, varspec) tuples
     _specs: List[Tuple[xr.Dataset, VarSpec]] = field(default_factory=list)
@@ -569,21 +569,21 @@ class Scene:
         # aren't evenly spaced
         warn_if_not_evenly_spaced(times)
 
-        if self.show_grid:
-            plotter.show_grid()
-
-        # Add bounds once at the beginning (static throughout animation)
-        self._add_bounds_to_plotter(plotter)
-
         # Convert our fps object to a number if needed
         if isinstance(fps, FPS):
             fps = fps.to_fps(times)
 
-        # PyVista needs the render pipeline initialized (via show) with the
-        # actors already added BEFORE open_gif. Otherwise written frames
-        # capture overlays (text, axes) but not the 3D actors.
+        # Order matters: render meshes and add bounds BEFORE show_grid(), so
+        # CubeAxes initializes against real data extents instead of the
+        # default unit cube (which leaves data outside the view frustum).
+        # PyVista also needs the render pipeline initialized (via show) with
+        # the actors already added BEFORE open_gif, otherwise written frames
+        # capture overlays but not the 3D actors.
         self._render_frame(plotter, times[0])
+        self._add_bounds_to_plotter(plotter)
         self._add_timestamp(plotter, times[0])
+        if self.show_grid:
+            plotter.show_grid()
         plotter.show(auto_close=False)
         plotter.open_gif(str(path), fps=fps)
 
