@@ -55,6 +55,30 @@ class Appearance:
 
         return kwargs
 
+    def to_blender_material(self) -> Dict[str, Any]:
+        """
+        Convert appearance to a renderer-agnostic Blender material description.
+
+        This is the Blender analog of :meth:`to_pyvista_kwargs`: it returns the
+        appearance-derived parts of the manifest ``material`` block (shader,
+        opacity, and a solid color if one is set). The coloring *mode*
+        (baked vertex colors vs. solid) is decided by the exporter, which has
+        the extra context of whether a scalar field is present.
+        """
+        material: Dict[str, Any] = {
+            "type": "surface",
+            "opacity": self.opacity,
+            # A physically-based default that reads as a clean, matte surface;
+            # a Blender user can override any of this on the imported material.
+            "shader": {
+                "base": "principled",
+                "roughness": 0.4,
+                "metallic": 0.0,
+                "emission_strength": 0.0,
+            },
+        }
+        return material
+
 
 @dataclass
 class ContourAppearance(Appearance):

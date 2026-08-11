@@ -43,6 +43,12 @@ dev = [
     "ruff",
     "mypy",
 ]
+# Blender export backend. 'alembic3d' is the 3D Alembic bindings (NOT the
+# SQLAlchemy 'alembic' database-migration tool). Wheels currently cover
+# CPython 3.10-3.13, so pin away from 3.14 until upstream ships those wheels.
+blender = [
+    "alembic3d; python_version < '3.14'",
+]
 
 [project.urls]
 Homepage = "https://github.com/cmdavis4/skyvista"

@@ -1,0 +1,679 @@
+"""
+Blender export backend for skyvista.
+
+This module turns a :class:`~skyvista.scene.Scene` into a self-contained
+*bundle* on disk -- data files plus a ``scene.json`` manifest -- that a Blender
+build script (or the sciblend fork) can assemble into a ``.blend`` WITHOUT
+Blender or ``bpy`` ever being importable in skyvista's own environment.
+
+The design boundary is deliberate: skyvista runs in your normal (pixi/pip)
+environment and only ever *writes* geometry + a declarative description;
+everything that touches ``bpy`` lives on the Blender side and reads the bundle.
+
+Carriers
+--------
+* Time-varying *meshes* (contours, slices, glyph meshes, trajectory tubes) are
+  written as **Alembic** (``.abc``) with per-frame changing topology, via the
+  ``alembic3d`` bindings. Blender ingests these through a Mesh Sequence Cache
+  modifier, which supports the changing vertex/face counts that isosurfaces
+  produce every timestep.
+* Volumes are written as **VDB** sequences (handled elsewhere / later).
+
+Coloring
+--------
+Scientific colormaps are baked on the skyvista side into per-vertex **C3f
+vertex colors**. This is the only per-vertex attribute that survives Blender's
+Alembic importer (raw float ``arbGeomParams`` do not import); it also keeps the
+figure's colors deterministic across frames instead of letting Blender
+renormalise per frame.
+
+Optional dependency
+-------------------
+Requires the ``blender`` extra::
+
+    pip install skyvista[blender]
+
+which pulls in ``alembic3d`` -- the 3D Alembic bindings. NOTE: this is *not*
+the PyPI package ``alembic`` (that is the unrelated SQLAlchemy database
+migration tool); mixing them up is a classic and confusing failure mode.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+import numpy as np
+
+from carlee_tools import PathLike
+
+if TYPE_CHECKING:
+    import pyvista as pv
+
+    from .scene import Scene
+    from .varspec import VarSpec
+
+
+# The manifest schema version. Bump when the on-disk contract changes in a way
+# the Blender-side reader must care about.
+SKYVISTA_MANIFEST_VERSION = "0.1"
+
+# Blender's Alembic importer only reads recognised typed params (colors, UVs,
+# velocities). We carry the baked colormap under this name; it becomes a
+# Blender Color Attribute of the same name.
+VERTEX_COLOR_ATTRIBUTE_NAME = "color"
+
+# Default colormap when an appearance requests scalar coloring but names none.
+DEFAULT_COLORMAP_NAME = "viridis"
+
+
+# =============================================================================
+# Configuration
+# =============================================================================
+@dataclass
+class BlenderTransform:
+    """
+    The single spatial transform applied identically to every object, the
+    camera, and the lights, so that all spatial relationships are preserved and
+    the mapping back to physical units stays recoverable.
+
+    The geometry written to disk stays in *physical* units (meters, etc.); this
+    transform is recorded in the manifest and applied on the Blender side (as a
+    parent-empty / object transform), so a Blender user still sees real
+    coordinates and can inspect or override the transform with standard tools.
+
+    The mapping is::
+
+        blender_xyz = (data_xyz - origin_shift) * scale
+        blender_z  *= z_exaggeration        # extra vertical factor, on top
+
+    Attributes:
+        scale: Uniform data-units -> Blender-units factor. Default 1/1000
+            (e.g. meters -> "kilometer-sized" Blender units), which keeps
+            atmospheric domains at a sane magnitude for Blender's single-
+            precision math and default clip planes.
+        origin_shift: Point in data units mapped to the Blender origin. When
+            None, defaults to the center of the merged data bounds so the
+            figure sits centered on the world origin (nice for orbiting and
+            camera framing). Pass (0, 0, 0) to keep absolute data positions.
+        z_exaggeration: Extra multiplier applied to the vertical axis only.
+            1.0 = physically faithful; >1 exaggerates relief. Always recorded.
+    """
+
+    scale: float = 1.0e-3
+    origin_shift: Optional[Tuple[float, float, float]] = None
+    z_exaggeration: float = 1.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "origin_shift": list(self.origin_shift)
+            if self.origin_shift is not None
+            else None,
+            "scale": self.scale,
+            "z_exaggeration": self.z_exaggeration,
+        }
+
+
+@dataclass
+class BlenderRenderConfig:
+    """
+    Render-level settings recorded in the manifest for the build script.
+
+    Attributes:
+        engine: "CYCLES" (paper-quality, needed for volumes) or "EEVEE" (fast
+            preview).
+        samples: Render samples per pixel.
+        resolution: (width, height) in pixels.
+        view_transform: Color-management view transform. "Standard" keeps
+            colors data-faithful; Blender's default AgX/Filmic would silently
+            alter a scientific figure's colors, so "Standard" is the default.
+        film_transparent: Whether the render background is transparent.
+    """
+
+    engine: str = "CYCLES"
+    samples: int = 128
+    resolution: Tuple[int, int] = (1920, 1080)
+    view_transform: str = "Standard"
+    film_transparent: bool = True
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "engine": self.engine,
+            "samples": self.samples,
+            "resolution": list(self.resolution),
+            "view_transform": self.view_transform,
+            "film_transparent": self.film_transparent,
+        }
+
+
+@dataclass
+class BlenderExportConfig:
+    """
+    Top-level configuration for a Blender export.
+
+    Attributes:
+        transform: The single spatial transform (see :class:`BlenderTransform`).
+        render: Render-level settings (see :class:`BlenderRenderConfig`).
+        fps: Frames per second the animation advertises; also the rate at which
+            Alembic samples are spaced in time.
+        frame_start: First Blender frame number.
+        world_preset: Named lighting/world preset for a decent out-of-the-box
+            look without Blender knowledge (interpreted on the Blender side).
+    """
+
+    transform: BlenderTransform = field(default_factory=BlenderTransform)
+    render: BlenderRenderConfig = field(default_factory=BlenderRenderConfig)
+    fps: float = 24.0
+    frame_start: int = 1
+    world_preset: str = "studio"
+
+
+# =============================================================================
+# Colormap baking (scalar field -> per-vertex RGB)
+# =============================================================================
+def bake_scalar_to_rgb(
+    scalar_values: np.ndarray,
+    colormap_name: str,
+    color_limits: Tuple[float, float],
+) -> np.ndarray:
+    """
+    Reproduce a scientific colormap as explicit per-vertex RGB.
+
+    We bake colors on the skyvista side (rather than storing the raw scalar and
+    letting Blender do it) because (a) raw float attributes do not survive
+    Blender's Alembic import, and (b) baking with a fixed global color range
+    guarantees the colors are identical across frames instead of drifting.
+
+    Args:
+        scalar_values: (n_points,) scalar field to color by.
+        colormap_name: Any matplotlib colormap name (e.g. "viridis").
+        color_limits: (vmin, vmax) mapped to the colormap ends. Held fixed
+            across all frames so animated colors stay consistent.
+
+    Returns:
+        (n_points, 3) float array of RGB in [0, 1].
+    """
+    import matplotlib
+    from matplotlib.colors import Normalize
+
+    colormap = matplotlib.colormaps[colormap_name]
+    normalize_to_unit_interval = Normalize(
+        vmin=color_limits[0], vmax=color_limits[1]
+    )
+    rgba_values = colormap(normalize_to_unit_interval(np.asarray(scalar_values)))
+    return np.ascontiguousarray(rgba_values[:, :3], dtype=np.float32)
+
+
+# =============================================================================
+# PyVista mesh -> plain arrays
+# =============================================================================
+@dataclass
+class MeshFrame:
+    """One timestep of a mesh: transposed into plain numpy arrays for Alembic."""
+
+    points_xyz: np.ndarray  # (n_points, 3) float32, physical units
+    triangle_vertex_indices: np.ndarray  # (n_triangles, 3) int32
+    scalar_values: Optional[np.ndarray]  # (n_points,) float, or None
+    rgb_values: Optional[np.ndarray] = None  # (n_points, 3) float, filled later
+
+
+def pyvista_mesh_to_frame(
+    pv_mesh: "pv.DataSet",
+    scalar_name: Optional[str],
+) -> MeshFrame:
+    """
+    Extract points, triangles, and (optionally) a scalar from a PyVista mesh.
+
+    The mesh is triangulated first so Alembic receives a uniform triangle
+    stream regardless of what polygon types the source produced.
+
+    Args:
+        pv_mesh: The mesh returned by ``VarSpec.create_mesh(ds, time)``.
+        scalar_name: Name of the point scalar to carry for coloring, or None.
+
+    Returns:
+        A :class:`MeshFrame` with plain numpy arrays.
+    """
+    # Triangulate so every face is a triangle (isosurfaces already are, but
+    # slices / glyphs may not be).
+    triangulated = pv_mesh.triangulate()
+
+    points_xyz = np.ascontiguousarray(triangulated.points, dtype=np.float32)
+
+    # PyVista stores faces as a flat [n, i0, i1, ..., n, j0, ...] stream. After
+    # triangulation every face has n == 3, so reshape to (n_tri, 4) and drop
+    # the leading count column.
+    faces_flat = np.asarray(triangulated.faces)
+    if faces_flat.size == 0:
+        triangle_vertex_indices = np.zeros((0, 3), dtype=np.int32)
+    else:
+        triangle_vertex_indices = faces_flat.reshape(-1, 4)[:, 1:4].astype(np.int32)
+
+    scalar_values: Optional[np.ndarray] = None
+    if scalar_name is not None and scalar_name in triangulated.point_data:
+        scalar_values = np.ascontiguousarray(
+            triangulated.point_data[scalar_name], dtype=np.float64
+        )
+    elif triangulated.active_scalars is not None:
+        # Fall back to whatever scalar create_mesh left active on the mesh.
+        scalar_values = np.ascontiguousarray(
+            triangulated.active_scalars, dtype=np.float64
+        )
+
+    return MeshFrame(
+        points_xyz=points_xyz,
+        triangle_vertex_indices=triangle_vertex_indices,
+        scalar_values=scalar_values,
+    )
+
+
+# =============================================================================
+# Alembic writing (the validated alembic3d path)
+# =============================================================================
+def _require_alembic():
+    """Import alembic3d + imath, or raise a helpful install message."""
+    try:
+        import imath  # noqa: F401
+        import alembic3d  # noqa: F401
+    except ImportError as import_error:  # pragma: no cover - env dependent
+        raise ImportError(
+            "The Blender export backend requires the 'blender' extra:\n"
+            "    pip install skyvista[blender]\n"
+            "This installs 'alembic3d' (the 3D Alembic bindings). Do NOT install "
+            "'alembic' -- that is the unrelated SQLAlchemy database tool."
+        ) from import_error
+    return alembic3d, imath
+
+
+def _numpy_points_to_v3f(imath, points_xyz: np.ndarray):
+    """Convert (n, 3) float32 -> imath.V3fArray using the fast buffer path."""
+    contiguous = np.ascontiguousarray(points_xyz, dtype=np.float32)
+    try:
+        return imath.V3fArrayFromBuffer(contiguous)
+    except Exception:
+        # Fallback: element-wise (slower, but always works).
+        v3f_array = imath.V3fArray(len(contiguous))
+        for i, (px, py, pz) in enumerate(contiguous):
+            v3f_array[i] = imath.V3f(float(px), float(py), float(pz))
+        return v3f_array
+
+
+def _numpy_ints_to_intarray(imath, values: np.ndarray):
+    """Convert a 1-D int array -> imath.IntArray using the fast buffer path."""
+    contiguous = np.ascontiguousarray(values, dtype=np.int32)
+    try:
+        return imath.IntArrayFromBuffer(contiguous)
+    except Exception:
+        int_array = imath.IntArray(len(contiguous))
+        for i, value in enumerate(contiguous):
+            int_array[i] = int(value)
+        return int_array
+
+
+def _numpy_rgb_to_c3f(imath, rgb_values: np.ndarray):
+    """Convert (n, 3) RGB -> imath.C3fArray (element-wise; no buffer ctor exists)."""
+    color_array = imath.C3fArray(len(rgb_values))
+    for i, (r, g, b) in enumerate(rgb_values):
+        color_array[i] = imath.Color3f(float(r), float(g), float(b))
+    return color_array
+
+
+def write_mesh_sequence_alembic(
+    output_path: PathLike,
+    frames: List[MeshFrame],
+    fps: float,
+    object_name: str,
+) -> None:
+    """
+    Write a sequence of mesh frames (with changing topology) to one ``.abc``.
+
+    Each frame may have a different vertex/face count; Alembic records this as
+    heterogeneous topology, which tells Blender to swap meshes per frame rather
+    than interpolate vertex positions.
+
+    Args:
+        output_path: Destination ``.abc`` path.
+        frames: Per-timestep meshes; each frame's ``rgb_values`` (if present) is
+            written as a per-vertex C3f color attribute named "color".
+        fps: Frame rate; Alembic samples are spaced 1/fps seconds apart.
+        object_name: Name of the poly-mesh object inside the archive.
+    """
+    alembic3d, imath = _require_alembic()
+    from alembic3d.Abc import OArchive
+    from alembic3d.AbcCoreAbstract import TimeSampling
+    from alembic3d.AbcGeom import (
+        GeometryScope,
+        OC3fGeomParam,
+        OC3fGeomParamSample,
+        OPolyMesh,
+        OPolyMeshSchemaSample,
+    )
+
+    archive = OArchive(str(output_path))
+
+    # Uniform time sampling: one sample every 1/fps seconds, starting at t=0.
+    time_sampling = TimeSampling(1.0 / fps, 0.0)
+    time_sampling_index = archive.addTimeSampling(time_sampling)
+
+    poly_mesh = OPolyMesh(archive.getTop(), object_name, time_sampling_index)
+    mesh_schema = poly_mesh.getSchema()
+
+    # Create the color param once (if any frame carries colors), then set it
+    # every frame to match that frame's vertex count.
+    any_frame_has_color = any(frame.rgb_values is not None for frame in frames)
+    color_param = None
+    if any_frame_has_color:
+        color_param = OC3fGeomParam(
+            mesh_schema.getArbGeomParams(),
+            VERTEX_COLOR_ATTRIBUTE_NAME,
+            False,  # not indexed
+            GeometryScope.kVertexScope,
+            1,  # extent
+            time_sampling_index,
+        )
+
+    for frame in frames:
+        imath_points = _numpy_points_to_v3f(imath, frame.points_xyz)
+
+        # Flatten triangle indices and build the per-face vertex-count stream
+        # (all 3, since we triangulated).
+        flat_indices = frame.triangle_vertex_indices.ravel()
+        imath_face_indices = _numpy_ints_to_intarray(imath, flat_indices)
+        n_triangles = len(frame.triangle_vertex_indices)
+        imath_face_counts = _numpy_ints_to_intarray(
+            imath, np.full(n_triangles, 3, dtype=np.int32)
+        )
+
+        mesh_schema.set(
+            OPolyMeshSchemaSample(
+                imath_points, imath_face_indices, imath_face_counts
+            )
+        )
+
+        if color_param is not None:
+            # If this frame lacks colors, fall back to mid-gray to keep the
+            # attribute's vertex count aligned with the geometry.
+            if frame.rgb_values is not None:
+                rgb = frame.rgb_values
+            else:
+                rgb = np.full((len(frame.points_xyz), 3), 0.5, dtype=np.float32)
+            color_param.set(
+                OC3fGeomParamSample(
+                    _numpy_rgb_to_c3f(imath, rgb), GeometryScope.kVertexScope
+                )
+            )
+
+    # Finalise the archive by dropping all references to it.
+    del mesh_schema, poly_mesh, color_param, archive
+
+
+# =============================================================================
+# Bounds / transform helpers
+# =============================================================================
+def _accumulate_bounds(
+    running_bounds: Optional[np.ndarray], points_xyz: np.ndarray
+) -> np.ndarray:
+    """Update a running [[xmin,ymin,zmin],[xmax,ymax,zmax]] with new points."""
+    if len(points_xyz) == 0:
+        return running_bounds
+    frame_min = points_xyz.min(axis=0)
+    frame_max = points_xyz.max(axis=0)
+    if running_bounds is None:
+        return np.vstack([frame_min, frame_max])
+    running_bounds[0] = np.minimum(running_bounds[0], frame_min)
+    running_bounds[1] = np.maximum(running_bounds[1], frame_max)
+    return running_bounds
+
+
+# =============================================================================
+# Per-spec export
+# =============================================================================
+def _coloring_scalar_name(spec: "VarSpec") -> Optional[str]:
+    """Which point scalar (if any) this spec colors by."""
+    geometry = spec.geometry
+    # Contour: geometry.scalar overrides varname; else varname is the scalar.
+    scalar = getattr(geometry, "scalar", None)
+    if scalar:
+        return scalar
+    return getattr(geometry, "varname", None)
+
+
+def _build_object_entry(
+    spec: "VarSpec",
+    dataset,
+    times: List[Any],
+    data_subdir: Path,
+    fps: float,
+    running_bounds: Optional[np.ndarray],
+) -> Tuple[Dict[str, Any], Optional[np.ndarray]]:
+    """
+    Export one spec to an Alembic file and return its manifest object entry
+    plus the updated running spatial bounds.
+
+    Currently implemented for surface-mesh specs (contours; slices/vectors/
+    trajectory tubes follow the same path). Volumes (VDB) are handled
+    separately and are skipped here.
+    """
+    from .varspec import ContourSpec
+
+    if not isinstance(spec, ContourSpec):
+        # Placeholder: other surface specs slot in here as they're validated;
+        # volumes go through a VDB writer elsewhere.
+        raise NotImplementedError(
+            f"Blender export not yet implemented for {type(spec).__name__}; "
+            "contour specs are supported in this first cut."
+        )
+
+    scalar_name = _coloring_scalar_name(spec)
+    appearance = spec.appearance
+
+    # ---- Pass 1: build every frame's geometry + gather the global scalar range
+    frames: List[MeshFrame] = []
+    global_scalar_min = np.inf
+    global_scalar_max = -np.inf
+    for time in times:
+        pv_mesh = spec.create_mesh(dataset, time)
+        if pv_mesh is None or len(pv_mesh.points) == 0:
+            # Keep an empty frame so frame indices stay aligned with time.
+            frames.append(
+                MeshFrame(
+                    points_xyz=np.zeros((0, 3), dtype=np.float32),
+                    triangle_vertex_indices=np.zeros((0, 3), dtype=np.int32),
+                    scalar_values=None,
+                )
+            )
+            continue
+        frame = pyvista_mesh_to_frame(pv_mesh, scalar_name)
+        frames.append(frame)
+        running_bounds = _accumulate_bounds(running_bounds, frame.points_xyz)
+        if frame.scalar_values is not None and len(frame.scalar_values) > 0:
+            global_scalar_min = min(global_scalar_min, float(frame.scalar_values.min()))
+            global_scalar_max = max(global_scalar_max, float(frame.scalar_values.max()))
+
+    # ---- Decide coloring: solid color, or baked colormap from the scalar
+    uses_scalar_coloring = (
+        appearance.color is None
+        and np.isfinite(global_scalar_min)
+        and global_scalar_max > global_scalar_min
+    )
+
+    color_limits: Optional[Tuple[float, float]] = None
+    colormap_name: Optional[str] = None
+    if uses_scalar_coloring:
+        color_limits = appearance.clim or (global_scalar_min, global_scalar_max)
+        colormap_name = appearance.cmap or DEFAULT_COLORMAP_NAME
+        # ---- Pass 2: bake per-vertex colors with the fixed global range
+        for frame in frames:
+            if frame.scalar_values is not None and len(frame.scalar_values) > 0:
+                frame.rgb_values = bake_scalar_to_rgb(
+                    frame.scalar_values, colormap_name, color_limits
+                )
+
+    # ---- Write the Alembic sequence
+    object_subdir = data_subdir / spec.name
+    object_subdir.mkdir(parents=True, exist_ok=True)
+    alembic_path = object_subdir / "sequence.abc"
+    write_mesh_sequence_alembic(
+        alembic_path, frames, fps=fps, object_name=spec.name
+    )
+
+    # ---- Build the manifest material
+    material = appearance.to_blender_material()
+    if uses_scalar_coloring:
+        material["coloring"] = {
+            "mode": "vertex_color",
+            "attribute": VERTEX_COLOR_ATTRIBUTE_NAME,
+            "cmap": colormap_name,
+            "clim": list(color_limits),
+        }
+    else:
+        material["coloring"] = {
+            "mode": "solid",
+            "color": appearance.color or "#cccccc",
+        }
+
+    # Label the topology honestly: "heterogeneous" only if vertex/face counts
+    # actually vary across frames (they usually do for isosurfaces, but not
+    # always -- a rigidly translating feature can keep a constant count).
+    distinct_frame_shapes = {
+        (len(frame.points_xyz), len(frame.triangle_vertex_indices))
+        for frame in frames
+    }
+    topology_label = (
+        "heterogeneous" if len(distinct_frame_shapes) > 1 else "homogeneous"
+    )
+
+    object_entry = {
+        "name": spec.name,
+        "spec_type": type(spec).__name__.replace("Spec", "").lower(),
+        "geometry": {
+            "carrier": "alembic",
+            "path": str(alembic_path.relative_to(data_subdir.parent)),
+            "object_path": f"/{spec.name}",
+            "topology": topology_label,
+        },
+        "material": material,
+    }
+    return object_entry, running_bounds
+
+
+# =============================================================================
+# Orchestration
+# =============================================================================
+def export_scene_to_blender(
+    scene: "Scene",
+    path: PathLike,
+    config: Optional[BlenderExportConfig] = None,
+    times: Optional[List[Any]] = None,
+) -> Path:
+    """
+    Export a whole Scene to a self-contained Blender bundle directory.
+
+    Writes ``scene.json`` (the manifest), ``provenance.json``, and per-object
+    Alembic sequences under ``data/``.
+
+    Args:
+        scene: The Scene to export.
+        path: Destination bundle directory (created if needed).
+        config: Export configuration; a default is used when None.
+        times: Times to render; defaults to the union of all dataset times.
+
+    Returns:
+        The bundle directory path.
+    """
+    config = config or BlenderExportConfig()
+    bundle_dir = Path(path)
+    data_dir = bundle_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    render_times = times if times is not None else scene._get_all_times()
+    n_frames = len(render_times)
+
+    object_entries: List[Dict[str, Any]] = []
+    running_bounds: Optional[np.ndarray] = None
+    for dataset, spec in scene._specs:
+        object_entry, running_bounds = _build_object_entry(
+            spec, dataset, render_times, data_dir, config.fps, running_bounds
+        )
+        object_entries.append(object_entry)
+
+    # ---- Resolve the transform's origin_shift (default: center of data bounds)
+    transform = config.transform
+    if transform.origin_shift is None and running_bounds is not None:
+        center = (running_bounds[0] + running_bounds[1]) / 2.0
+        resolved_origin_shift: Optional[Tuple[float, float, float]] = tuple(
+            float(c) for c in center
+        )
+    else:
+        resolved_origin_shift = transform.origin_shift
+
+    # ---- Assemble the manifest
+    manifest = {
+        "skyvista_manifest_version": SKYVISTA_MANIFEST_VERSION,
+        "generated_by": {
+            "skyvista_version": _skyvista_version(),
+            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+        },
+        "transform": {
+            "origin_shift": list(resolved_origin_shift)
+            if resolved_origin_shift is not None
+            else [0.0, 0.0, 0.0],
+            "scale": transform.scale,
+            "z_exaggeration": transform.z_exaggeration,
+        },
+        "time": {
+            "fps": config.fps,
+            "frame_start": config.frame_start,
+            "frame_end": config.frame_start + max(n_frames - 1, 0),
+            "data_times": [_json_safe_time(t) for t in render_times],
+        },
+        "render": config.render.to_dict(),
+        "world": {"preset": config.world_preset},
+        "camera": None,  # TODO: derive from camera.py / bounds in a later slice
+        "objects": object_entries,
+        "annotations": {
+            "title": scene.title,
+            "show_grid": scene.show_grid,
+            "background": scene.background,
+        },
+    }
+
+    manifest_path = bundle_dir / "scene.json"
+    with open(manifest_path, "w") as manifest_file:
+        json.dump(manifest, manifest_file, indent=2)
+
+    # ---- Minimal provenance record
+    provenance = {
+        "skyvista_version": _skyvista_version(),
+        "n_specs": len(scene._specs),
+        "n_frames": n_frames,
+    }
+    with open(bundle_dir / "provenance.json", "w") as provenance_file:
+        json.dump(provenance, provenance_file, indent=2)
+
+    return bundle_dir
+
+
+def _skyvista_version() -> str:
+    try:
+        from . import __version__
+
+        return __version__
+    except Exception:
+        return "unknown"
+
+
+def _json_safe_time(time: Any) -> Any:
+    """Render a time value as something JSON can serialise."""
+    if time is None:
+        return None
+    if isinstance(time, (np.datetime64,)):
+        return str(time)
+    if isinstance(time, dt.datetime):
+        return time.isoformat()
+    if isinstance(time, (np.integer, np.floating)):
+        return time.item()
+    return str(time)

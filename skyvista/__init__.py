@@ -122,6 +122,14 @@ from .mesh import PVMesh
 from . import presets
 from . import animation
 
+# Blender export configuration (the backend itself is imported lazily by
+# Scene.to_blender so the optional 'alembic3d' dep is only needed on export).
+from .blender import (
+    BlenderExportConfig,
+    BlenderRenderConfig,
+    BlenderTransform,
+)
+
 # Example data loader
 from .examples import load_example_storm_data
 
@@ -192,6 +200,10 @@ __all__ = [
     "PVMesh",
     "presets",
     "animation",
+    # Blender export
+    "BlenderExportConfig",
+    "BlenderRenderConfig",
+    "BlenderTransform",
     "load_example_storm_data",
     # Camera utilities
     "calculate_camera_offset",

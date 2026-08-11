@@ -644,6 +644,37 @@ class Scene:
         plotter.show()
         return self
 
+    def to_blender(
+        self,
+        path: PathLike,
+        config: Optional["Any"] = None,
+        times: Optional[List[Any]] = None,
+    ) -> "Scene":
+        """
+        Export to a self-contained Blender bundle directory.
+
+        Writes a ``scene.json`` manifest plus per-object Alembic sequences that
+        a Blender build script (or the sciblend fork) turns into a ``.blend``,
+        without Blender / ``bpy`` being needed here. Parallels ``export_html()``
+        and ``animate()`` -- it is just another render target for the same
+        renderer-agnostic specs.
+
+        Requires the ``blender`` extra (``pip install skyvista[blender]``).
+
+        Args:
+            path: Destination bundle directory (created if needed).
+            config: Optional ``BlenderExportConfig``; a sensible default is used
+                when None (scale=1/1000, Cycles, Standard color management).
+            times: Times to render (default: all times across datasets).
+
+        Returns:
+            self (for method chaining)
+        """
+        from .blender import export_scene_to_blender
+
+        export_scene_to_blender(self, path, config=config, times=times)
+        return self
+
     def export_html(
         self,
         path: PathLike,
