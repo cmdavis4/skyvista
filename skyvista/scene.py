@@ -649,30 +649,44 @@ class Scene:
         path: PathLike,
         config: Optional["Any"] = None,
         times: Optional[List[Any]] = None,
+        build: bool = False,
+        blender_executable: str = "blender",
     ) -> "Scene":
         """
         Export to a self-contained Blender bundle directory.
 
-        Writes a ``scene.json`` manifest plus per-object Alembic sequences that
-        a Blender build script (or the sciblend fork) turns into a ``.blend``,
+        Writes a ``scene.json`` manifest plus per-object geometry caches
+        (Alembic for meshes, VDB for volumes) and a copy of the build script,
+        which a Blender build (or the sciblend fork) turns into a ``.blend`` --
         without Blender / ``bpy`` being needed here. Parallels ``export_html()``
         and ``animate()`` -- it is just another render target for the same
         renderer-agnostic specs.
 
-        Requires the ``blender`` extra (``pip install skyvista[blender]``).
+        Requires the ``blender`` extra (``pip install skyvista[blender]``) for
+        mesh export; volume (VDB) export additionally needs conda-forge
+        ``openvdb``.
 
         Args:
             path: Destination bundle directory (created if needed).
             config: Optional ``BlenderExportConfig``; a sensible default is used
                 when None (scale=1/1000, Cycles, Standard color management).
             times: Times to render (default: all times across datasets).
+            build: If True, run Blender headlessly to assemble the ``.blend``.
+            blender_executable: Blender command used when ``build`` is True.
 
         Returns:
             self (for method chaining)
         """
         from .blender import export_scene_to_blender
 
-        export_scene_to_blender(self, path, config=config, times=times)
+        export_scene_to_blender(
+            self,
+            path,
+            config=config,
+            times=times,
+            build=build,
+            blender_executable=blender_executable,
+        )
         return self
 
     def export_html(

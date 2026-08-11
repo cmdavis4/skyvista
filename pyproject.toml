@@ -65,7 +65,7 @@ Documentation = "https://github.com/cmdavis4/skyvista#readme"
 packages = ["skyvista", "skyvista.presets"]
 
 [tool.setuptools.package-data]
-skyvista = ["py.typed"]
+skyvista = ["py.typed", "blender_assets/*.py"]
 
 [tool.black]
 line-length = 88

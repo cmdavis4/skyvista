@@ -23,6 +23,14 @@ jupyter = "*"
 build = "*"
 twine = ">=6.2.0, <7"
 
+# Blender export backend. OpenVDB (volumes) is a conda dependency -- it has no
+# usable PyPI wheel for recent Python. alembic3d (meshes) is a PyPI package.
+[feature.blender.dependencies]
+openvdb = "*"
+
+[feature.blender.pypi-dependencies]
+alembic3d = "*"
+
 [environments]
 # Default environment - includes test feature so `pixi run test` works
 default = {features = ["test"], solve-group = "default"}
@@ -32,6 +40,9 @@ minimal = {features = ["test", "minimal"], solve-group = "minimal"}
 
 # Development environment - includes everything
 dev = {features = ["test", "dev"], solve-group = "dev"}
+
+# Blender export environment - adds Alembic + OpenVDB writers
+blender = {features = ["test", "blender"]}
 
 [tasks]
 # Install the package in editable mode

@@ -207,6 +207,50 @@ def bake_scalar_to_rgb(
     return np.ascontiguousarray(rgba_values[:, :3], dtype=np.float32)
 
 
+def sample_colormap_stops(
+    colormap_name: str, n_stops: int = 32
+) -> List[List[float]]:
+    """
+    Sample a matplotlib colormap into ``[position, r, g, b]`` stops.
+
+    Volumes store the *raw* scalar in the VDB (not baked colors), so the color
+    ramp is rebuilt on the Blender side. Blender's bundled Python has no
+    matplotlib, so we bake the colormap into explicit stops here and ship them
+    in the bundle for the build script to load into a ColorRamp node.
+    """
+    import matplotlib
+
+    colormap = matplotlib.colormaps[colormap_name]
+    stop_positions = np.linspace(0.0, 1.0, n_stops)
+    stops: List[List[float]] = []
+    for position in stop_positions:
+        r, g, b, _ = colormap(float(position))
+        stops.append([float(position), float(r), float(g), float(b)])
+    return stops
+
+
+def write_colormap_lut(
+    bundle_dir: Path, colormap_name: str, n_stops: int = 32
+) -> str:
+    """
+    Write a colormap's stops to ``assets/colormaps/<cmap>.json`` in the bundle.
+
+    Returns the path relative to the bundle, for the manifest to reference.
+    """
+    colormap_assets_dir = bundle_dir / "assets" / "colormaps"
+    colormap_assets_dir.mkdir(parents=True, exist_ok=True)
+    lut_path = colormap_assets_dir / f"{colormap_name}.json"
+    with open(lut_path, "w") as lut_file:
+        json.dump(
+            {
+                "cmap": colormap_name,
+                "stops": sample_colormap_stops(colormap_name, n_stops),
+            },
+            lut_file,
+        )
+    return str(lut_path.relative_to(bundle_dir))
+
+
 # =============================================================================
 # PyVista mesh -> plain arrays
 # =============================================================================
@@ -794,6 +838,9 @@ def _build_volume_entry(
         (global_min, global_max) if np.isfinite(global_min) else (0.0, 1.0)
     )
     colormap_name = appearance.cmap or DEFAULT_COLORMAP_NAME
+    # Ship the colormap stops so the build script can rebuild the ramp without
+    # matplotlib (Blender's Python lacks it).
+    colormap_lut_path = write_colormap_lut(data_subdir.parent, colormap_name)
     material = {
         "type": "volume",
         "coloring": {
@@ -801,6 +848,7 @@ def _build_volume_entry(
             "attribute": varname,
             "cmap": colormap_name,
             "clim": list(color_limits),
+            "colormap_lut": colormap_lut_path,
         },
         # Density is driven by the same grid, normalised through clim on the
         # Blender side; the build script/user tunes the overall strength.
@@ -828,18 +876,24 @@ def export_scene_to_blender(
     path: PathLike,
     config: Optional[BlenderExportConfig] = None,
     times: Optional[List[Any]] = None,
+    build: bool = False,
+    blender_executable: str = "blender",
 ) -> Path:
     """
     Export a whole Scene to a self-contained Blender bundle directory.
 
-    Writes ``scene.json`` (the manifest), ``provenance.json``, and per-object
-    Alembic sequences under ``data/``.
+    Writes ``scene.json`` (the manifest), ``provenance.json``, per-object
+    geometry caches under ``data/``, and a copy of the ``build_scene.py`` build
+    script so the bundle is runnable on its own.
 
     Args:
         scene: The Scene to export.
         path: Destination bundle directory (created if needed).
         config: Export configuration; a default is used when None.
         times: Times to render; defaults to the union of all dataset times.
+        build: If True, invoke Blender headlessly to build the ``.blend`` from
+            the bundle (requires ``blender_executable`` on PATH).
+        blender_executable: Blender command used when ``build`` is True.
 
     Returns:
         The bundle directory path.
@@ -914,7 +968,42 @@ def export_scene_to_blender(
     with open(bundle_dir / "provenance.json", "w") as provenance_file:
         json.dump(provenance, provenance_file, indent=2)
 
+    # ---- Copy the build script so the bundle is self-contained and runnable
+    build_script_path = _copy_build_script(bundle_dir)
+
+    # ---- Optionally invoke Blender to assemble the .blend right now
+    if build:
+        _launch_blender_build(blender_executable, build_script_path, bundle_dir)
+
     return bundle_dir
+
+
+def _copy_build_script(bundle_dir: Path) -> Path:
+    """Copy the packaged Blender build script into the bundle."""
+    import shutil
+
+    source = Path(__file__).parent / "blender_assets" / "build_scene.py"
+    destination = bundle_dir / "build_scene.py"
+    shutil.copyfile(source, destination)
+    return destination
+
+
+def _launch_blender_build(
+    blender_executable: str, build_script_path: Path, bundle_dir: Path
+) -> None:
+    """Run ``blender --background --python build_scene.py -- <bundle>`` headlessly."""
+    import subprocess
+
+    command = [
+        blender_executable,
+        "--background",
+        "--python",
+        str(build_script_path),
+        "--",
+        str(bundle_dir),
+    ]
+    print("Running:", " ".join(command))
+    subprocess.run(command, check=True)
 
 
 def _skyvista_version() -> str:
