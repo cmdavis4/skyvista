@@ -25,11 +25,33 @@ twine = ">=6.2.0, <7"
 
 # Blender export backend. OpenVDB (volumes) is a conda dependency -- it has no
 # usable PyPI wheel for recent Python. alembic3d (meshes) is a PyPI package.
+#
+# Pin Python to 3.13: alembic3d + imath ship wheels only for CPython 3.10-3.13
+# (no 3.14 yet). On 3.14 alembic3d installs as an empty stub and imath is
+# missing, so the Alembic writer can't import.
 [feature.blender.dependencies]
-openvdb = "*"
+python = "3.13.*"
+# Pin OpenVDB < 13: v13.0 bumped the .vdb FILE_FORMAT_VERSION to 225, which
+# Blender 5.0.1's bundled OpenVDB refuses to read ("expected version 224 or
+# earlier, got version 225"). 12.x writes format 224, which Blender reads. The
+# Python write() API exposes no way to downgrade the format, so this must be
+# controlled by the library version.
+openvdb = "<13"
 
-[feature.blender.pypi-dependencies]
-alembic3d = "*"
+# 1.8.12 is the first alembic3d release with actual PyAlembic wheels (cp310-
+# cp313); it bundles the imath bindings the writer needs. The 0.0.1 release is
+# only a name-reservation placeholder (no bindings) -- do NOT let the solver
+# fall back to it, or `from alembic3d.Abc import ...` fails at import.
+#
+# Wheels exist for osx-arm64, linux-64 (manylinux), and win_amd64 -- but NOT
+# osx-64 (Intel Mac). Scope the dep per-platform so solving the blender env for
+# osx-64 doesn't fail on the missing wheel; mesh export is simply unavailable
+# there (volumes via conda openvdb still work).
+[feature.blender.target.osx-arm64.pypi-dependencies]
+alembic3d = ">=1.8.12"
+
+[feature.blender.target.linux-64.pypi-dependencies]
+alembic3d = ">=1.8.12"
 
 [environments]
 # Default environment - includes test feature so `pixi run test` works
@@ -76,6 +98,10 @@ carlee_tools = { path = "../carlee_tools", editable = true }
 [dependencies]
 python = ">=3.13.0"
 pip = ">=26.0.1,<27"
+# pyproj is a compiled transitive dep (via carlee-tools -> metpy). Pull it from
+# conda-forge (PROJ bundled) so uv doesn't try to build the PyPI sdist, which
+# fails without a system PROJ ("proj executable not found").
+pyproj = "*"
 ipykernel = ">=7.2.0,<8"
 jupyter = ">=1.1.1,<2"
 ipywidgets = ">=8.1.8,<9"

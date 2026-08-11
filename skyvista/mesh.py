@@ -11,7 +11,8 @@ from typing import Any, Optional
 
 import pyvista as pv
 
-from carlee_tools import NUMERICAL_DT_FORMAT, dt_to_str
+from carlee_tools import dt_to_str
+from carlee_tools.dt import NUMERICAL_DT_FORMAT  # not re-exported at top level in ct 1.2.0
 
 
 @dataclass(kw_only=True)

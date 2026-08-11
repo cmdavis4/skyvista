@@ -329,8 +329,14 @@ def import_alembic_object(bundle_dir, object_spec, root_empty):
     abc_path = bundle_dir / geometry["path"]
 
     before = set(bpy.context.scene.objects)
+    # set_frame_range=False: don't let the importer overwrite the manifest-driven
+    # frame range (configure_render already set it). Each Alembic archive would
+    # otherwise reset the scene range to its own sample span on import.
     bpy.ops.wm.alembic_import(
-        filepath=str(abc_path), as_background_job=False, validate_meshes=True
+        filepath=str(abc_path),
+        as_background_job=False,
+        validate_meshes=True,
+        set_frame_range=False,
     )
     imported = [o for o in bpy.context.scene.objects if o not in before]
     if not imported:
@@ -463,17 +469,45 @@ def setup_colorbar_compositing(scene, manifest, bundle_dir):
     if not colorbars:
         return
 
-    scene.use_nodes = True
-    node_tree = scene.node_tree
+    # Resolve the compositor node tree across Blender versions. 5.0 removed
+    # scene.node_tree / scene.use_nodes in favor of a CompositorNodeTree
+    # datablock on scene.compositing_node_group, whose final output is a Group
+    # Output node (CompositorNodeComposite no longer exists). Fall back to the
+    # <=4.x scene.node_tree + Composite path.
+    uses_node_group = hasattr(scene, "compositing_node_group")
+    if uses_node_group:
+        node_tree = scene.compositing_node_group
+        if node_tree is None:
+            node_tree = bpy.data.node_groups.new(
+                "skyvista_compositor", "CompositorNodeTree"
+            )
+            scene.compositing_node_group = node_tree
+    else:
+        scene.use_nodes = True
+        node_tree = scene.node_tree
+
     nodes = node_tree.nodes
     links = node_tree.links
 
     render_layers = next((n for n in nodes if n.type == "R_LAYERS"), None)
     if render_layers is None:
         render_layers = nodes.new("CompositorNodeRLayers")
-    composite = next((n for n in nodes if n.type == "COMPOSITE"), None)
-    if composite is None:
-        composite = nodes.new("CompositorNodeComposite")
+
+    if uses_node_group:
+        # The group needs an image output on its interface; the Group Output
+        # node's input mirrors it and carries the final composite.
+        if not any(item.in_out == "OUTPUT" for item in node_tree.interface.items_tree):
+            node_tree.interface.new_socket(
+                name="Image", in_out="OUTPUT", socket_type="NodeSocketColor"
+            )
+        output_node = next((n for n in nodes if n.type == "GROUP_OUTPUT"), None)
+        if output_node is None:
+            output_node = nodes.new("NodeGroupOutput")
+    else:
+        output_node = next((n for n in nodes if n.type == "COMPOSITE"), None)
+        if output_node is None:
+            output_node = nodes.new("CompositorNodeComposite")
+    final_output_socket = output_node.inputs[0]  # "Image" (composite) / group out
 
     resolution_x = scene.render.resolution_x
     resolution_y = scene.render.resolution_y
@@ -487,7 +521,15 @@ def setup_colorbar_compositing(scene, manifest, bundle_dir):
         image_node.image = image
 
         scale_node = nodes.new("CompositorNodeScale")
-        scale_node.space = "RELATIVE"
+        # Scale mode: <=4.x exposed a node .space enum ("RELATIVE"); 5.0 replaced
+        # it with a "Type" menu input socket (whose default is already
+        # "Relative"). Set whichever this Blender has.
+        if hasattr(scale_node, "space"):
+            scale_node.space = "RELATIVE"
+        else:
+            type_socket = scale_node.inputs.get("Type")
+            if type_socket is not None:
+                type_socket.default_value = "Relative"
         scale_node.inputs["X"].default_value = 0.18
         scale_node.inputs["Y"].default_value = 0.18
 
@@ -499,14 +541,25 @@ def setup_colorbar_compositing(scene, manifest, bundle_dir):
         )
 
         alpha_over_node = nodes.new("CompositorNodeAlphaOver")
+        # 5.0 renamed AlphaOver's two image inputs to Background/Foreground and
+        # added a separate Factor input (the old layout was Fac, Image, Image at
+        # indices 0/1/2). Prefer names, fall back to the old positional inputs.
+        background_input = (
+            alpha_over_node.inputs.get("Background") or alpha_over_node.inputs[1]
+        )
+        foreground_input = (
+            alpha_over_node.inputs.get("Foreground") or alpha_over_node.inputs[2]
+        )
+        factor_input = alpha_over_node.inputs.get("Factor") or alpha_over_node.inputs[0]
+        factor_input.default_value = 1.0
 
         links.new(image_node.outputs["Image"], scale_node.inputs["Image"])
         links.new(scale_node.outputs["Image"], translate_node.inputs["Image"])
-        links.new(current_image_socket, alpha_over_node.inputs[1])
-        links.new(translate_node.outputs["Image"], alpha_over_node.inputs[2])
+        links.new(current_image_socket, background_input)
+        links.new(translate_node.outputs["Image"], foreground_input)
         current_image_socket = alpha_over_node.outputs["Image"]
 
-    links.new(current_image_socket, composite.inputs["Image"])
+    links.new(current_image_socket, final_output_socket)
 
 
 # ---------------------------------------------------------------------------

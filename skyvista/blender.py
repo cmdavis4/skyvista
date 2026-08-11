@@ -490,8 +490,13 @@ def write_mesh_sequence_alembic(
 
     archive = OArchive(str(output_path))
 
-    # Uniform time sampling: one sample every 1/fps seconds, starting at t=0.
-    time_sampling = TimeSampling(1.0 / fps, 0.0)
+    # Uniform time sampling: one sample every 1/fps seconds. Start at t=1/fps
+    # (not 0) so sample i lands on Blender frame i+1 -- i.e. the first timestep
+    # plays at frame 1. This makes the Mesh Sequence Cache 1-indexed, matching
+    # the VDB volume sequence (frame_start=1) and the manifest's frame_start=1;
+    # a t=0 start would put meshes on frames 0..N-1 while volumes sit on 1..N,
+    # so the two carriers would show different timesteps on the same frame.
+    time_sampling = TimeSampling(1.0 / fps, 1.0 / fps)
     time_sampling_index = archive.addTimeSampling(time_sampling)
 
     poly_mesh = OPolyMesh(archive.getTop(), object_name, time_sampling_index)
