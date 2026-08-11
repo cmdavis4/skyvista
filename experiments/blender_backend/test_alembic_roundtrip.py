@@ -63,6 +63,18 @@ from alembic3d.AbcGeom import (
 VERTEX_COLOR_PARAM_NAME = "color"
 VERTEX_SCALAR_PARAM_NAME = "THETA"
 
+# Editable-scalar spike: carry the scalar as a *float-color* attribute (gray,
+# value in all channels), in two variants -- raw physical units and normalized
+# to [0, 1]. Blender imports C3f params as Color Attributes, but the storage
+# type decides usefulness: FLOAT_COLOR preserves magnitude (so the raw variant
+# is re-rampable in physical units), while BYTE_COLOR clamps to [0, 1] (so only
+# the normalized variant survives, and the ramp must map [0,1] -> clim). This
+# script only *writes* both; blender_verify.py reports which storage Blender uses.
+SCALAR_GRAY_RAW_PARAM_NAME = "scalar_gray_raw"
+SCALAR_GRAY_NORM_PARAM_NAME = "scalar_gray_norm"
+PHYSICAL_SCALAR_MIN = 290.0  # e.g. THETA in kelvin
+PHYSICAL_SCALAR_MAX = 320.0
+
 # Frame rate the archive advertises. Blender maps Alembic sample times to
 # frames using the scene fps; 24 keeps the test aligned with Blender's
 # default so sample i lands exactly on frame (i + 1).
@@ -259,6 +271,23 @@ def write_animated_alembic(output_path: str, n_frames: int):
         1,
         time_sampling_index,
     )
+    # The spike: the same scalar carried as float-color (gray) attributes.
+    scalar_gray_raw_param = OC3fGeomParam(
+        arb_geom_params,
+        SCALAR_GRAY_RAW_PARAM_NAME,
+        False,
+        GeometryScope.kVertexScope,
+        1,
+        time_sampling_index,
+    )
+    scalar_gray_norm_param = OC3fGeomParam(
+        arb_geom_params,
+        SCALAR_GRAY_NORM_PARAM_NAME,
+        False,
+        GeometryScope.kVertexScope,
+        1,
+        time_sampling_index,
+    )
 
     reference_frames = []
     for frame_index in range(n_frames):
@@ -292,6 +321,23 @@ def write_animated_alembic(output_path: str, n_frames: int):
             )
         )
 
+        # Spike: physical-range and normalized scalar carried as gray colors.
+        physical_scalar = PHYSICAL_SCALAR_MIN + scalar_normalized * (
+            PHYSICAL_SCALAR_MAX - PHYSICAL_SCALAR_MIN
+        )
+        gray_raw = np.repeat(physical_scalar[:, None], 3, axis=1)
+        gray_norm = np.repeat(scalar_normalized[:, None], 3, axis=1)
+        scalar_gray_raw_param.set(
+            OC3fGeomParamSample(
+                numpy_rgb_to_imath(gray_raw), GeometryScope.kVertexScope
+            )
+        )
+        scalar_gray_norm_param.set(
+            OC3fGeomParamSample(
+                numpy_rgb_to_imath(gray_norm), GeometryScope.kVertexScope
+            )
+        )
+
         reference_frames.append(
             {
                 "n_points": len(points_xyz),
@@ -299,11 +345,14 @@ def write_animated_alembic(output_path: str, n_frames: int):
                 "points_xyz": points_xyz,
                 "scalar_field": scalar_field,
                 "rgb_values": rgb_values,
+                "gray_raw": gray_raw,
+                "gray_norm": gray_norm,
             }
         )
 
     # Archive is finalised when it goes out of scope; drop our reference.
-    del mesh_schema, poly_mesh, color_param, scalar_param, archive
+    del mesh_schema, poly_mesh, color_param, scalar_param
+    del scalar_gray_raw_param, scalar_gray_norm_param, archive
     return reference_frames
 
 
@@ -352,6 +401,12 @@ def read_and_verify(input_path: str, reference_frames: list) -> bool:
 
     color_param = IC3fGeomParam(arb_geom_params, VERTEX_COLOR_PARAM_NAME)
     scalar_param = IFloatGeomParam(arb_geom_params, VERTEX_SCALAR_PARAM_NAME)
+    scalar_gray_raw_param = IC3fGeomParam(
+        arb_geom_params, SCALAR_GRAY_RAW_PARAM_NAME
+    )
+    scalar_gray_norm_param = IC3fGeomParam(
+        arb_geom_params, SCALAR_GRAY_NORM_PARAM_NAME
+    )
 
     observed_vertex_counts = []
     for frame_index, reference in enumerate(reference_frames):
@@ -417,6 +472,23 @@ def read_and_verify(input_path: str, reference_frames: list) -> bool:
         )
         check(scalar_matches, f"frame {frame_index}: vertex[0] raw scalar matches")
 
+        # Verify the spike's gray float-color attributes round-tripped (the
+        # write side always works for C3f; blender_verify checks the import).
+        gray_raw_read = scalar_gray_raw_param.getExpandedValue(
+            sample_selector
+        ).getVals()
+        check(
+            np.isclose(gray_raw_read[0][0], reference["gray_raw"][0][0], atol=1e-3),
+            f"frame {frame_index}: gray_raw float-color matches physical scalar",
+        )
+        gray_norm_read = scalar_gray_norm_param.getExpandedValue(
+            sample_selector
+        ).getVals()
+        check(
+            np.isclose(gray_norm_read[0][0], reference["gray_norm"][0][0], atol=1e-4),
+            f"frame {frame_index}: gray_norm float-color matches normalized scalar",
+        )
+
     # The whole point: vertex counts must actually differ across frames.
     check(
         len(set(observed_vertex_counts)) == len(observed_vertex_counts),
@@ -444,10 +516,13 @@ def main():
     print("\n" + "=" * 60)
     if passed:
         print("RESULT: PASS -- Alembic write path is usable for skyvista.")
-        print("  changing topology + baked vertex color + raw scalar all")
-        print("  round-tripped correctly, with heterogeneous topology recorded.")
-        print("\n  Next: run blender_verify.py inside Blender to confirm the")
-        print("  import side (per-frame topology + attribute availability).")
+        print("  changing topology + baked vertex color + raw scalar +")
+        print("  gray float-color scalar (raw & normalized) all round-tripped,")
+        print("  with heterogeneous topology recorded.")
+        print("\n  Next: run blender_verify.py inside Blender. It reports which")
+        print("  attributes import and -- for the editable-scalar spike -- whether")
+        print("  the gray scalar imports as FLOAT_COLOR (re-rampable in raw units)")
+        print("  or BYTE_COLOR (clamped; use the normalized variant + clim).")
     else:
         print("RESULT: FAIL -- see failed checks above.")
     print("=" * 60)

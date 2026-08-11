@@ -106,6 +106,10 @@ def main() -> int:
     observed_vertex_counts = []
     color_attribute_present_each_frame = []
     scalar_attribute_present_each_frame = []
+    # Editable-scalar spike: track how the gray float-color scalar imports.
+    gray_raw_storage_types = []      # 'FLOAT_COLOR' / 'BYTE_COLOR' / None
+    gray_raw_max_channel_values = []  # >1.5 => magnitude preserved (float)
+    gray_norm_present_each_frame = []
 
     for current_frame in range(frame_start, frame_end + 1):
         scene.frame_set(current_frame)
@@ -121,6 +125,24 @@ def main() -> int:
         # Raw scalar -> generic float attribute (the uncertain one)
         scalar_attribute = evaluated_mesh.attributes.get("THETA")
         scalar_attribute_present_each_frame.append(scalar_attribute is not None)
+
+        # Spike: the raw-physical gray scalar. Its storage type + magnitude tell
+        # us whether the "re-ramp in Blender" path is viable in raw units.
+        gray_raw_attribute = evaluated_mesh.color_attributes.get("scalar_gray_raw")
+        if gray_raw_attribute is not None:
+            gray_raw_storage_types.append(gray_raw_attribute.data_type)
+            try:
+                gray_raw_max_channel_values.append(
+                    max(datum.color[0] for datum in gray_raw_attribute.data)
+                )
+            except Exception:
+                gray_raw_max_channel_values.append(float("nan"))
+        else:
+            gray_raw_storage_types.append(None)
+            gray_raw_max_channel_values.append(float("nan"))
+
+        gray_norm_attribute = evaluated_mesh.color_attributes.get("scalar_gray_norm")
+        gray_norm_present_each_frame.append(gray_norm_attribute is not None)
 
         color_status = "yes" if color_attribute is not None else "NO"
         scalar_status = "yes" if scalar_attribute is not None else "NO"
@@ -144,16 +166,36 @@ def main() -> int:
           f"attribute present on every frame "
           f"(if FAIL: prefer baking colors on the skyvista side)")
 
+    # Editable-scalar spike verdict.
+    gray_raw_present = all(t is not None for t in gray_raw_storage_types)
+    observed_storage = {t for t in gray_raw_storage_types if t}
+    finite_maxes = [m for m in gray_raw_max_channel_values if m == m]
+    observed_max = max(finite_maxes) if finite_maxes else float("nan")
+    all_gray_norm_present = all(gray_norm_present_each_frame)
+    print(f"  [INFO] gray_raw storage type(s): {observed_storage or 'none'}; "
+          f"max channel value ~ {observed_max:.2f} "
+          f"(>1.5 => float magnitude preserved)")
+    print(f"  [{'PASS' if all_gray_norm_present else 'INFO'}] normalized gray "
+          f"scalar attribute present on every frame")
+
+    print("\nEditable-scalar spike verdict:")
+    if gray_raw_present and "FLOAT_COLOR" in observed_storage and observed_max > 1.5:
+        print("  VIABLE (raw): the scalar imports as FLOAT_COLOR with magnitude")
+        print("  intact -> offer scalar_ramp mode carrying the RAW scalar as a")
+        print("  float-color attribute; user re-ramps in physical units in Blender.")
+    elif gray_raw_present or all_gray_norm_present:
+        print("  VIABLE (normalized only): the gray scalar imports but is clamped")
+        print("  to [0,1] (BYTE_COLOR) -> carry the NORMALIZED scalar as a")
+        print("  float-color attribute plus clim in the manifest; the Blender")
+        print("  material maps [0,1] -> clim before the color ramp.")
+    else:
+        print("  NOT VIABLE: no gray scalar attribute imported -> keep baking")
+        print("  colors on the skyvista side (the current default).")
+
     print("\nDesign takeaway:")
     if all_color_present and topology_changes:
-        print("  Baked vertex-color path is viable -> reproduce the scientific")
-        print("  colormap on the skyvista side and store RGB as vertex colors.")
-    if all_scalar_present:
-        print("  Raw-scalar path is ALSO viable -> you can defer the color ramp")
-        print("  to a Blender material node, editable by the end user.")
-    elif not all_scalar_present:
-        print("  Raw-scalar attribute did NOT import on this Blender version;")
-        print("  bake colors on the skyvista side (or add a color ramp per-frame).")
+        print("  Baked vertex-color path is viable (the current default) ->")
+        print("  reproduce the colormap on the skyvista side as vertex colors.")
 
     return 0 if (topology_changes and all_color_present) else 1
 
