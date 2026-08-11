@@ -449,6 +449,67 @@ def setup_world(scene, manifest):
 
 
 # ---------------------------------------------------------------------------
+# Colorbar compositing (best-effort overlay of the baked colorbar PNGs)
+# ---------------------------------------------------------------------------
+def setup_colorbar_compositing(scene, manifest, bundle_dir):
+    """
+    Overlay the baked colorbar PNGs onto the render via the compositor.
+
+    Best-effort: compositor socket names vary across Blender versions, so the
+    whole thing is wrapped by the caller; if it fails the render still works and
+    the colorbar PNGs remain in the bundle for manual compositing.
+    """
+    colorbars = manifest.get("annotations", {}).get("colorbars", [])
+    if not colorbars:
+        return
+
+    scene.use_nodes = True
+    node_tree = scene.node_tree
+    nodes = node_tree.nodes
+    links = node_tree.links
+
+    render_layers = next((n for n in nodes if n.type == "R_LAYERS"), None)
+    if render_layers is None:
+        render_layers = nodes.new("CompositorNodeRLayers")
+    composite = next((n for n in nodes if n.type == "COMPOSITE"), None)
+    if composite is None:
+        composite = nodes.new("CompositorNodeComposite")
+
+    resolution_x = scene.render.resolution_x
+    resolution_y = scene.render.resolution_y
+    current_image_socket = render_layers.outputs["Image"]
+
+    for colorbar_index, colorbar in enumerate(colorbars):
+        image = bpy.data.images.load(
+            str(bundle_dir / colorbar["image"]), check_existing=True
+        )
+        image_node = nodes.new("CompositorNodeImage")
+        image_node.image = image
+
+        scale_node = nodes.new("CompositorNodeScale")
+        scale_node.space = "RELATIVE"
+        scale_node.inputs["X"].default_value = 0.18
+        scale_node.inputs["Y"].default_value = 0.18
+
+        # Stack colorbars down the right edge of the frame.
+        translate_node = nodes.new("CompositorNodeTranslate")
+        translate_node.inputs["X"].default_value = resolution_x * 0.40
+        translate_node.inputs["Y"].default_value = (
+            resolution_y * 0.30 - colorbar_index * resolution_y * 0.32
+        )
+
+        alpha_over_node = nodes.new("CompositorNodeAlphaOver")
+
+        links.new(image_node.outputs["Image"], scale_node.inputs["Image"])
+        links.new(scale_node.outputs["Image"], translate_node.inputs["Image"])
+        links.new(current_image_socket, alpha_over_node.inputs[1])
+        links.new(translate_node.outputs["Image"], alpha_over_node.inputs[2])
+        current_image_socket = alpha_over_node.outputs["Image"]
+
+    links.new(current_image_socket, composite.inputs["Image"])
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
@@ -490,6 +551,13 @@ def main():
 
     setup_camera(scene, manifest, transform, built_objects)
     setup_world(scene, manifest)
+
+    # Colorbar compositing is best-effort: never let it abort the build.
+    try:
+        setup_colorbar_compositing(scene, manifest, bundle_dir)
+    except Exception as compositing_error:
+        print(f"  [WARN] colorbar compositing skipped: "
+              f"{type(compositing_error).__name__}: {compositing_error}")
 
     blend_path = bundle_dir / f"{bundle_dir.name}.blend"
     bpy.ops.wm.save_as_mainfile(filepath=str(blend_path))

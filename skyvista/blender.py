@@ -290,6 +290,45 @@ def write_colormap_lut(
     return str(lut_path.relative_to(bundle_dir))
 
 
+def write_colorbar_png(
+    bundle_dir: Path,
+    name: str,
+    colormap_name: str,
+    color_limits: Tuple[float, float],
+    label: str = "",
+) -> str:
+    """
+    Render a standalone scientific colorbar to ``assets/colorbars/<name>.png``.
+
+    Blender cannot draw a data colorbar, so we render one with matplotlib (using
+    the exact colormap + limits the figure was colored with) for compositing
+    over the render or dropping into a paper. Uses the Figure API directly to
+    avoid touching pyplot's global state / backend.
+
+    Returns the path relative to the bundle, for the manifest to reference.
+    """
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import Normalize
+    from matplotlib.figure import Figure
+
+    colorbar_dir = bundle_dir / "assets" / "colorbars"
+    colorbar_dir.mkdir(parents=True, exist_ok=True)
+    colorbar_path = colorbar_dir / f"{name}.png"
+
+    figure = Figure(figsize=(1.3, 4.5), dpi=200)
+    # A narrow colorbar axis on the left, leaving room for ticks + label.
+    colorbar_axis = figure.add_axes((0.06, 0.05, 0.22, 0.9))
+    scalar_mappable = ScalarMappable(
+        norm=Normalize(vmin=color_limits[0], vmax=color_limits[1]),
+        cmap=colormap_name,
+    )
+    colorbar = figure.colorbar(scalar_mappable, cax=colorbar_axis)
+    if label:
+        colorbar.set_label(label)
+    figure.savefig(str(colorbar_path), transparent=True, bbox_inches="tight")
+    return str(colorbar_path.relative_to(bundle_dir))
+
+
 # =============================================================================
 # PyVista mesh -> plain arrays
 # =============================================================================
@@ -645,11 +684,23 @@ def _build_mesh_entry(
     # ---- Build the manifest material
     material = appearance.to_blender_material()
     if uses_scalar_coloring:
+        # Label the colorbar by the scalar actually mapped to color. make_contour
+        # auto-fills scalar_bar_title with the *contour* varname, which would
+        # mislabel a surface colored by a different scalar; only honor a title
+        # the user deliberately set (one that differs from the varname).
+        contour_varname = getattr(spec.geometry, "varname", None)
+        deliberate_title = (
+            appearance.scalar_bar_title
+            if appearance.scalar_bar_title not in (None, contour_varname)
+            else None
+        )
+        colorbar_label = deliberate_title or scalar_name or ""
         material["coloring"] = {
             "mode": "vertex_color",
             "attribute": VERTEX_COLOR_ATTRIBUTE_NAME,
             "cmap": colormap_name,
             "clim": list(color_limits),
+            "label": colorbar_label,
         }
     else:
         material["coloring"] = {
@@ -888,6 +939,7 @@ def _build_volume_entry(
             "cmap": colormap_name,
             "clim": list(color_limits),
             "colormap_lut": colormap_lut_path,
+            "label": appearance.scalar_bar_title or varname,
         },
         # Density is driven by the same grid, normalised through clim on the
         # Blender side; the build script/user tunes the overall strength.
@@ -1106,6 +1158,28 @@ def export_scene_to_blender(
     else:
         resolved_origin_shift = transform.origin_shift
 
+    # ---- Render a colorbar PNG for every scalar-colored object
+    colorbar_annotations: List[Dict[str, Any]] = []
+    for object_entry in object_entries:
+        coloring = object_entry["material"].get("coloring", {})
+        if coloring.get("cmap") and coloring.get("clim"):
+            colorbar_image = write_colorbar_png(
+                bundle_dir,
+                object_entry["name"],
+                coloring["cmap"],
+                tuple(coloring["clim"]),
+                coloring.get("label", ""),
+            )
+            colorbar_annotations.append(
+                {
+                    "for": object_entry["name"],
+                    "cmap": coloring["cmap"],
+                    "clim": coloring["clim"],
+                    "label": coloring.get("label", ""),
+                    "image": colorbar_image,
+                }
+            )
+
     # ---- Assemble the manifest
     manifest = {
         "skyvista_manifest_version": SKYVISTA_MANIFEST_VERSION,
@@ -1136,6 +1210,7 @@ def export_scene_to_blender(
             "title": scene.title,
             "show_grid": scene.show_grid,
             "background": scene.background,
+            "colorbars": colorbar_annotations,
         },
     }
 
