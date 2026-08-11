@@ -237,9 +237,23 @@ def pyvista_mesh_to_frame(
     Returns:
         A :class:`MeshFrame` with plain numpy arrays.
     """
-    # Triangulate so every face is a triangle (isosurfaces already are, but
-    # slices / glyphs may not be).
-    triangulated = pv_mesh.triangulate()
+    import warnings
+
+    import pyvista as pv
+
+    # Reduce to a PolyData surface first. Contours/tubes/glyphs are already
+    # PolyData, but slices come back as a StructuredGrid, whose triangulate()
+    # yields an UnstructuredGrid (no .faces). extract_surface() gives PolyData
+    # for any dataset type; then triangulate() makes every face a triangle.
+    if isinstance(pv_mesh, pv.PolyData):
+        surface = pv_mesh
+    else:
+        # extract_surface() warns about a future default we aren't affected by
+        # (we want the current 'dataset_surface' behavior); silence it.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            surface = pv_mesh.extract_surface()
+    triangulated = surface.triangulate()
 
     points_xyz = np.ascontiguousarray(triangulated.points, dtype=np.float32)
 
@@ -432,13 +446,27 @@ def _accumulate_bounds(
 # Per-spec export
 # =============================================================================
 def _coloring_scalar_name(spec: "VarSpec") -> Optional[str]:
-    """Which point scalar (if any) this spec colors by."""
+    """
+    Which point scalar (if any) a mesh-type spec colors by.
+
+    Differs per spec type because the geometry classes name their scalar
+    differently. Returning None means "no explicit scalar" -- the exporter
+    then falls back to whatever scalar ``create_mesh`` left active, or to a
+    solid color when an appearance color is set.
+    """
+    from .varspec import ContourSpec, SliceSpec, TrajectorySpec, VectorSpec
+
     geometry = spec.geometry
-    # Contour: geometry.scalar overrides varname; else varname is the scalar.
-    scalar = getattr(geometry, "scalar", None)
-    if scalar:
-        return scalar
-    return getattr(geometry, "varname", None)
+    if isinstance(spec, ContourSpec):
+        # geometry.scalar overrides varname; else color by the contoured var.
+        return geometry.scalar or geometry.varname
+    if isinstance(spec, SliceSpec):
+        return geometry.varname
+    if isinstance(spec, TrajectorySpec):
+        return geometry.scalar  # may be None -> solid color
+    if isinstance(spec, VectorSpec):
+        return geometry.scale_by  # may be None -> fall back to active scalar
+    return getattr(geometry, "scalar", None) or getattr(geometry, "varname", None)
 
 
 def _build_object_entry(
@@ -450,23 +478,34 @@ def _build_object_entry(
     running_bounds: Optional[np.ndarray],
 ) -> Tuple[Dict[str, Any], Optional[np.ndarray]]:
     """
-    Export one spec to an Alembic file and return its manifest object entry
-    plus the updated running spatial bounds.
+    Dispatch one spec to the appropriate carrier and return its manifest object
+    entry plus the updated running spatial bounds.
 
-    Currently implemented for surface-mesh specs (contours; slices/vectors/
-    trajectory tubes follow the same path). Volumes (VDB) are handled
-    separately and are skipped here.
+    Surface-mesh specs (contour, slice, vector glyphs, trajectory tubes) go to
+    Alembic; volume specs go to a VDB sequence.
     """
-    from .varspec import ContourSpec
+    from .varspec import VolumeSpec
 
-    if not isinstance(spec, ContourSpec):
-        # Placeholder: other surface specs slot in here as they're validated;
-        # volumes go through a VDB writer elsewhere.
-        raise NotImplementedError(
-            f"Blender export not yet implemented for {type(spec).__name__}; "
-            "contour specs are supported in this first cut."
-        )
+    if isinstance(spec, VolumeSpec):
+        return _build_volume_entry(spec, dataset, times, data_subdir, running_bounds)
+    return _build_mesh_entry(
+        spec, dataset, times, data_subdir, fps, running_bounds
+    )
 
+
+def _build_mesh_entry(
+    spec: "VarSpec",
+    dataset,
+    times: List[Any],
+    data_subdir: Path,
+    fps: float,
+    running_bounds: Optional[np.ndarray],
+) -> Tuple[Dict[str, Any], Optional[np.ndarray]]:
+    """
+    Export a surface-mesh spec to an Alembic sequence (one frame per time),
+    baking scalar coloring into per-vertex colors, and return its manifest
+    object entry plus the updated running spatial bounds.
+    """
     scalar_name = _coloring_scalar_name(spec)
     appearance = spec.appearance
 
@@ -554,6 +593,227 @@ def _build_object_entry(
             "path": str(alembic_path.relative_to(data_subdir.parent)),
             "object_path": f"/{spec.name}",
             "topology": topology_label,
+        },
+        "material": material,
+    }
+    return object_entry, running_bounds
+
+
+# =============================================================================
+# Volume export (VDB)
+# =============================================================================
+def _require_openvdb():
+    """
+    Import the OpenVDB Python bindings, or raise a helpful message.
+
+    Unlike the mesh carrier (``alembic3d`` on PyPI), OpenVDB has no usable
+    Python wheel for recent CPython -- the only PyPI build is CPython 3.7.
+    The practical source is conda-forge's ``openvdb`` package (natural for a
+    pixi/conda environment). The import name varies by build, so try both.
+    """
+    try:
+        import openvdb  # conda-forge exposes the module as 'openvdb'
+
+        return openvdb
+    except ImportError:
+        pass
+    try:
+        import pyopenvdb  # some builds expose it as 'pyopenvdb'
+
+        return pyopenvdb
+    except ImportError as import_error:
+        raise ImportError(
+            "Volume (VDB) export requires the OpenVDB Python bindings, which "
+            "have no PyPI wheel for recent Python. Install via conda-forge, "
+            "e.g. in pixi add 'openvdb' to a 'blender' feature, or:\n"
+            "    conda install -c conda-forge openvdb\n"
+            "Mesh export (Alembic) does not need this."
+        ) from import_error
+
+
+def _axis_voxel_size(coordinate_values: np.ndarray) -> float:
+    """
+    Uniform voxel size for one axis (VDB grids are regular voxel lattices).
+
+    Uses the mean spacing and warns if the coordinate is not evenly spaced,
+    since a single voxel size cannot faithfully represent a stretched grid.
+    """
+    coordinate_values = np.asarray(coordinate_values, dtype=float)
+    spacings = np.diff(coordinate_values)
+    mean_spacing = float(np.mean(spacings))
+    if spacings.size > 1 and np.ptp(spacings) > 1e-6 * abs(mean_spacing):
+        import warnings
+
+        warnings.warn(
+            "VDB volume export assumes a uniform voxel size per axis, but a "
+            "coordinate is not evenly spaced; using the mean spacing. A "
+            "stretched vertical grid will be slightly distorted -- resample to "
+            "a uniform grid for full fidelity.",
+            stacklevel=2,
+        )
+    return mean_spacing
+
+
+def write_volume_sequence_vdb(
+    output_dir: Path,
+    frame_arrays: List[np.ndarray],
+    grid_name: str,
+    transform_matrix: List[List[float]],
+) -> List[Path]:
+    """
+    Write a sequence of dense scalar volumes to numbered ``.vdb`` files.
+
+    The numbering (``name_0001.vdb`` ...) is what Blender auto-detects as an
+    animated volume sequence. Each grid carries the same index->world linear
+    transform so the volume sits in physical coordinates, consistent with the
+    Alembic mesh objects.
+
+    Args:
+        output_dir: Directory to write the numbered files into.
+        frame_arrays: Per-timestep dense (nx, ny, nz) float arrays.
+        grid_name: Name of the grid inside each file (referenced by the shader).
+        transform_matrix: 4x4 index->world matrix (OpenVDB row-vector
+            convention: translation in the last row).
+
+    Returns:
+        The list of written file paths.
+    """
+    openvdb = _require_openvdb()
+    written_paths: List[Path] = []
+    for frame_index, dense_array in enumerate(frame_arrays):
+        grid = openvdb.FloatGrid()
+        grid.copyFromArray(np.ascontiguousarray(dense_array, dtype=np.float32))
+        grid.name = grid_name
+        grid.transform = openvdb.createLinearTransform(matrix=transform_matrix)
+        file_path = output_dir / f"{grid_name}_{frame_index + 1:04d}.vdb"
+        openvdb.write(str(file_path), grids=[grid])
+        written_paths.append(file_path)
+    return written_paths
+
+
+def _build_volume_entry(
+    spec: "VarSpec",
+    dataset,
+    times: List[Any],
+    data_subdir: Path,
+    running_bounds: Optional[np.ndarray],
+) -> Tuple[Dict[str, Any], Optional[np.ndarray]]:
+    """
+    Export a volume spec to a VDB sequence and return its manifest object entry.
+
+    Requires a rectilinear grid (1-D x/y/z coordinates); VDB is a regular voxel
+    lattice, so curvilinear/geographic/spherical grids would need resampling
+    first and are rejected here.
+    """
+    from .grid_utils import select_time
+    from .grids import resolve_coordinates
+
+    varname = spec.geometry.varname
+    appearance = spec.appearance
+
+    # ---- Require a rectilinear grid (1-D coordinate axes)
+    coordinate_names = resolve_coordinates(dataset, ["x", "y", "z"])
+    x_name = coordinate_names["x"]
+    y_name = coordinate_names["y"]
+    z_name = coordinate_names["z"]
+    for coordinate_name in (x_name, y_name, z_name):
+        if coordinate_name not in dataset.coords or dataset[coordinate_name].ndim != 1:
+            raise NotImplementedError(
+                "VDB volume export requires a rectilinear grid with 1-D x/y/z "
+                f"coordinates; '{coordinate_name}' is missing or multi-dimensional. "
+                "Resample to a uniform grid first."
+            )
+
+    x_coordinates = dataset[x_name].values
+    y_coordinates = dataset[y_name].values
+    z_coordinates = dataset[z_name].values
+
+    # ---- Build the index->world transform (voxel sizes + origin)
+    voxel_size_x = _axis_voxel_size(x_coordinates)
+    voxel_size_y = _axis_voxel_size(y_coordinates)
+    voxel_size_z = _axis_voxel_size(z_coordinates)
+    origin_x = float(x_coordinates[0])
+    origin_y = float(y_coordinates[0])
+    origin_z = float(z_coordinates[0])
+    # OpenVDB row-vector convention: world = index_homogeneous @ M, so the
+    # per-axis scales sit on the diagonal and the origin is the last ROW.
+    transform_matrix = [
+        [voxel_size_x, 0.0, 0.0, 0.0],
+        [0.0, voxel_size_y, 0.0, 0.0],
+        [0.0, 0.0, voxel_size_z, 0.0],
+        [origin_x, origin_y, origin_z, 1.0],
+    ]
+
+    # ---- Per-time dense arrays (nx, ny, nz), thresholded, NaN-cleaned
+    frame_arrays: List[np.ndarray] = []
+    global_min = np.inf
+    global_max = -np.inf
+    for time in times:
+        dataset_at_time = select_time(dataset, time)
+        # Transpose to a consistent (x, y, z) index order for copyFromArray.
+        data_array = dataset_at_time[varname].transpose(x_name, y_name, z_name)
+        dense_array = np.asarray(data_array.values, dtype=np.float32)
+
+        # Apply the spec's threshold by zeroing out-of-range voxels (0 is empty
+        # space to the volume renderer).
+        if spec.geometry.threshold:
+            low_threshold, high_threshold = spec.geometry.threshold
+            if low_threshold is not None:
+                dense_array = np.where(dense_array < low_threshold, 0.0, dense_array)
+            if high_threshold is not None:
+                dense_array = np.where(dense_array > high_threshold, 0.0, dense_array)
+        dense_array = np.nan_to_num(dense_array, nan=0.0)
+        frame_arrays.append(dense_array)
+
+        finite_values = dense_array[np.isfinite(dense_array)]
+        if finite_values.size:
+            global_min = min(global_min, float(finite_values.min()))
+            global_max = max(global_max, float(finite_values.max()))
+
+    # ---- Fold the volume's spatial extent into the running scene bounds
+    volume_corner_points = np.array(
+        [
+            [x_coordinates.min(), y_coordinates.min(), z_coordinates.min()],
+            [x_coordinates.max(), y_coordinates.max(), z_coordinates.max()],
+        ],
+        dtype=float,
+    )
+    running_bounds = _accumulate_bounds(running_bounds, volume_corner_points)
+
+    # ---- Write the numbered VDB sequence
+    object_subdir = data_subdir / spec.name
+    object_subdir.mkdir(parents=True, exist_ok=True)
+    write_volume_sequence_vdb(
+        object_subdir, frame_arrays, grid_name=varname, transform_matrix=transform_matrix
+    )
+    # Blender picks the sequence up from the '####' numbered pattern.
+    path_pattern = f"data/{spec.name}/{varname}_####.vdb"
+
+    # ---- Material: a volume shader driven by the scalar through a color ramp
+    color_limits = appearance.clim or (
+        (global_min, global_max) if np.isfinite(global_min) else (0.0, 1.0)
+    )
+    colormap_name = appearance.cmap or DEFAULT_COLORMAP_NAME
+    material = {
+        "type": "volume",
+        "coloring": {
+            "mode": "scalar_ramp",
+            "attribute": varname,
+            "cmap": colormap_name,
+            "clim": list(color_limits),
+        },
+        # Density is driven by the same grid, normalised through clim on the
+        # Blender side; the build script/user tunes the overall strength.
+        "density": {"grid": varname, "clim": list(color_limits), "scale": 1.0},
+    }
+
+    object_entry = {
+        "name": spec.name,
+        "spec_type": "volume",
+        "geometry": {
+            "carrier": "vdb_sequence",
+            "path_pattern": path_pattern,
+            "grid_name": varname,
         },
         "material": material,
     }

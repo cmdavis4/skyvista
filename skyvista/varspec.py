@@ -185,7 +185,7 @@ class ContourSpec(VarSpec):
         # Sample scalar field if different from contour variable
         if self.geometry.scalar and self.geometry.scalar != varname:
             add_scalar_to_grid(grid, ds, self.geometry.scalar)
-            mesh = mesh.sample(grid, pass_point_arrays=False, pass_cell_arrays=False)
+            mesh = mesh.sample(grid, pass_point_data=False, pass_cell_data=False)
             mesh.set_active_scalars(self.geometry.scalar)
 
         return mesh

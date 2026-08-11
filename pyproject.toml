@@ -43,9 +43,14 @@ dev = [
     "ruff",
     "mypy",
 ]
-# Blender export backend. 'alembic3d' is the 3D Alembic bindings (NOT the
-# SQLAlchemy 'alembic' database-migration tool). Wheels currently cover
+# Blender export backend (mesh carrier). 'alembic3d' is the 3D Alembic bindings
+# (NOT the SQLAlchemy 'alembic' database-migration tool). Wheels currently cover
 # CPython 3.10-3.13, so pin away from 3.14 until upstream ships those wheels.
+#
+# NOTE: *Volume* (VDB) export additionally needs the OpenVDB Python bindings,
+# which have NO PyPI wheel for recent Python -- install via conda-forge
+# ('conda install -c conda-forge openvdb', or add 'openvdb' to a pixi feature).
+# Mesh export (contours/slices/vectors/trajectories) needs only this pip extra.
 blender = [
     "alembic3d; python_version < '3.14'",
 ]
