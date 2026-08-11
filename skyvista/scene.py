@@ -650,6 +650,7 @@ class Scene:
         config: Optional["Any"] = None,
         times: Optional[List[Any]] = None,
         build: bool = False,
+        render: bool = False,
         blender_executable: str = "blender",
     ) -> "Scene":
         """
@@ -672,7 +673,10 @@ class Scene:
                 when None (scale=1/1000, Cycles, Standard color management).
             times: Times to render (default: all times across datasets).
             build: If True, run Blender headlessly to assemble the ``.blend``.
-            blender_executable: Blender command used when ``build`` is True.
+            render: If True, also render the animation to ``<path>/render/`` in
+                the same headless Blender run. Implies ``build``.
+            blender_executable: Blender command used when ``build``/``render``
+                is True.
 
         Returns:
             self (for method chaining)
@@ -685,6 +689,7 @@ class Scene:
             config=config,
             times=times,
             build=build,
+            render=render,
             blender_executable=blender_executable,
         )
         return self

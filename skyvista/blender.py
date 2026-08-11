@@ -1120,6 +1120,7 @@ def export_scene_to_blender(
     config: Optional[BlenderExportConfig] = None,
     times: Optional[List[Any]] = None,
     build: bool = False,
+    render: bool = False,
     blender_executable: str = "blender",
 ) -> Path:
     """
@@ -1136,7 +1137,10 @@ def export_scene_to_blender(
         times: Times to render; defaults to the union of all dataset times.
         build: If True, invoke Blender headlessly to build the ``.blend`` from
             the bundle (requires ``blender_executable`` on PATH).
-        blender_executable: Blender command used when ``build`` is True.
+        render: If True, also render the animation to ``<bundle>/render/`` in the
+            same headless Blender run. Implies ``build``.
+        blender_executable: Blender command used when ``build``/``render`` is
+            True.
 
     Returns:
         The bundle directory path.
@@ -1239,9 +1243,12 @@ def export_scene_to_blender(
     # ---- Copy the build script so the bundle is self-contained and runnable
     build_script_path = _copy_build_script(bundle_dir)
 
-    # ---- Optionally invoke Blender to assemble the .blend right now
-    if build:
-        _launch_blender_build(blender_executable, build_script_path, bundle_dir)
+    # ---- Optionally invoke Blender to assemble the .blend (and render) now.
+    #      render implies build -- both happen in the one headless Blender run.
+    if build or render:
+        _launch_blender_build(
+            blender_executable, build_script_path, bundle_dir, render=render
+        )
 
     return bundle_dir
 
@@ -1257,9 +1264,17 @@ def _copy_build_script(bundle_dir: Path) -> Path:
 
 
 def _launch_blender_build(
-    blender_executable: str, build_script_path: Path, bundle_dir: Path
+    blender_executable: str,
+    build_script_path: Path,
+    bundle_dir: Path,
+    render: bool = False,
 ) -> None:
-    """Run ``blender --background --python build_scene.py -- <bundle>`` headlessly."""
+    """
+    Run the build script in Blender headlessly.
+
+    ``blender --background --python build_scene.py -- <bundle> [--render]``.
+    With ``render`` the build also renders the animation to ``<bundle>/render/``.
+    """
     import subprocess
 
     command = [
@@ -1270,6 +1285,8 @@ def _launch_blender_build(
         "--",
         str(bundle_dir),
     ]
+    if render:
+        command.append("--render")
     print("Running:", " ".join(command))
     subprocess.run(command, check=True)
 

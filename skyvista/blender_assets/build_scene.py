@@ -633,10 +633,16 @@ def main():
     print(f"Saved {blend_path}  ({successes} objects, {failures} failed)")
 
     if do_render:
-        render_path = bundle_dir / "render"
-        scene.render.filepath = str(render_path) + "/frame_"
-        bpy.ops.render.render(animation=n_frames > 1, write_still=n_frames == 1)
-        print(f"Rendered to {render_path}")
+        render_dir = bundle_dir / "render"
+        render_dir.mkdir(parents=True, exist_ok=True)
+        # PNG + alpha so a transparent film (film_transparent) is preserved on
+        # disk; Blender appends the frame number and extension to this prefix.
+        scene.render.image_settings.file_format = "PNG"
+        scene.render.image_settings.color_mode = "RGBA"
+        scene.render.filepath = str(render_dir / "frame_")
+        is_animation = n_frames > 1
+        bpy.ops.render.render(animation=is_animation, write_still=not is_animation)
+        print(f"Rendered {n_frames} frame(s) to {render_dir}")
 
 
 if __name__ == "__main__":
