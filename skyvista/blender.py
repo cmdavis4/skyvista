@@ -150,6 +150,43 @@ class BlenderRenderConfig:
 
 
 @dataclass
+class BlenderCameraConfig:
+    """
+    How to place and animate the camera.
+
+    Camera keyframes are written to the manifest in *data* (physical) space;
+    the build script applies the same scene transform to them as to the
+    geometry, so the camera stays consistent with the data.
+
+    Attributes:
+        mode: "static" (one fixed 3/4 view), "orbit" (circle the scene over the
+            animation), or "follow" (track a moving feature via position vars).
+        lens_mm: Camera focal length in millimeters.
+        distance_factor: Camera distance as a multiple of the data bounding-box
+            diagonal (larger = further away / more zoomed out).
+        azimuth_deg: Horizontal viewing angle (0 = +x, 90 = +y).
+        elevation_deg: Vertical angle above the horizon.
+        n_orbit_keyframes: Number of keyframes for "orbit" mode.
+        orbit_revolutions: How many full turns "orbit" makes over the animation.
+        follow_position_vars: (x_var, y_var) giving the tracked feature's
+            horizontal position over time, used by "follow" mode. Defaults to
+            the storm-tracking convention used elsewhere in skyvista.
+    """
+
+    mode: str = "static"
+    lens_mm: float = 50.0
+    distance_factor: float = 2.0
+    azimuth_deg: float = -55.0
+    elevation_deg: float = 22.0
+    n_orbit_keyframes: int = 24
+    orbit_revolutions: float = 1.0
+    follow_position_vars: Tuple[str, str] = (
+        "storm_position_x",
+        "storm_position_y",
+    )
+
+
+@dataclass
 class BlenderExportConfig:
     """
     Top-level configuration for a Blender export.
@@ -157,6 +194,7 @@ class BlenderExportConfig:
     Attributes:
         transform: The single spatial transform (see :class:`BlenderTransform`).
         render: Render-level settings (see :class:`BlenderRenderConfig`).
+        camera: Camera placement/animation (see :class:`BlenderCameraConfig`).
         fps: Frames per second the animation advertises; also the rate at which
             Alembic samples are spaced in time.
         frame_start: First Blender frame number.
@@ -166,6 +204,7 @@ class BlenderExportConfig:
 
     transform: BlenderTransform = field(default_factory=BlenderTransform)
     render: BlenderRenderConfig = field(default_factory=BlenderRenderConfig)
+    camera: BlenderCameraConfig = field(default_factory=BlenderCameraConfig)
     fps: float = 24.0
     frame_start: int = 1
     world_preset: str = "studio"
@@ -869,6 +908,149 @@ def _build_volume_entry(
 
 
 # =============================================================================
+# Camera
+# =============================================================================
+def _follow_positions(
+    scene: "Scene",
+    render_times: List[Any],
+    position_vars: Tuple[str, str],
+) -> Optional[List[Tuple[float, float]]]:
+    """
+    Read a tracked feature's (x, y) position at each render time.
+
+    Looks across the scene's datasets for the first one carrying both position
+    variables (the storm-tracking convention). Returns one (x, y) per time, or
+    None if no dataset has them.
+    """
+    x_var, y_var = position_vars
+    for dataset, _ in scene._specs:
+        if x_var in dataset and y_var in dataset:
+            track: List[Tuple[float, float]] = []
+            for time in render_times:
+                if "time" in dataset.dims and time is not None:
+                    dataset_at_time = dataset.sel(time=time)
+                else:
+                    dataset_at_time = dataset
+                x_value = float(np.ravel(dataset_at_time[x_var].values)[0])
+                y_value = float(np.ravel(dataset_at_time[y_var].values)[0])
+                track.append((x_value, y_value))
+            return track
+    return None
+
+
+def _compute_camera_manifest(
+    camera_config: BlenderCameraConfig,
+    running_bounds: Optional[np.ndarray],
+    render_times: List[Any],
+    frame_start: int,
+    scene: "Scene",
+) -> Optional[Dict[str, Any]]:
+    """
+    Build the manifest ``camera`` block in data (physical) space.
+
+    Supports a fixed 3/4 "static" view, an "orbit" that circles the scene over
+    the animation, and "follow" that tracks a moving feature at a constant
+    offset. Keyframes are in data units; the build script applies the scene
+    transform to them so the camera stays registered to the geometry.
+    """
+    import math
+    import warnings
+
+    if running_bounds is None:
+        return None
+
+    bounds_min = running_bounds[0]
+    bounds_max = running_bounds[1]
+    center = (bounds_min + bounds_max) / 2.0
+    diagonal = float(np.linalg.norm(bounds_max - bounds_min)) or 1.0
+    distance = diagonal * camera_config.distance_factor
+
+    # Unit view direction from azimuth/elevation, then the camera offset vector.
+    azimuth = math.radians(camera_config.azimuth_deg)
+    elevation = math.radians(camera_config.elevation_deg)
+    offset = np.array(
+        [
+            distance * math.cos(elevation) * math.cos(azimuth),
+            distance * math.cos(elevation) * math.sin(azimuth),
+            distance * math.sin(elevation),
+        ]
+    )
+
+    n_times = len(render_times)
+    frame_end = frame_start + max(n_times - 1, 0)
+    up_vector = [0.0, 0.0, 1.0]
+    center_point = [float(c) for c in center]
+    keyframes: List[Dict[str, Any]] = []
+
+    mode = camera_config.mode
+    if mode == "follow":
+        track = _follow_positions(
+            scene, render_times, camera_config.follow_position_vars
+        )
+        if track is None:
+            warnings.warn(
+                "Camera mode 'follow' requested but no dataset has "
+                f"{camera_config.follow_position_vars}; using a static camera.",
+                stacklevel=2,
+            )
+            mode = "static"
+        else:
+            # Hold a constant offset from the tracked feature (at the data's
+            # vertical center), so the feature stays framed as it moves.
+            for time_index, (feature_x, feature_y) in enumerate(track):
+                look_at = [feature_x, feature_y, float(center[2])]
+                location = [look_at[i] + float(offset[i]) for i in range(3)]
+                keyframes.append(
+                    {
+                        "frame": frame_start + time_index,
+                        "location": location,
+                        "look_at": look_at,
+                        "up": up_vector,
+                    }
+                )
+
+    if mode == "orbit" and n_times > 1:
+        n_keyframes = max(2, camera_config.n_orbit_keyframes)
+        for keyframe_index in range(n_keyframes):
+            fraction = keyframe_index / (n_keyframes - 1)
+            frame = int(round(frame_start + fraction * (frame_end - frame_start)))
+            orbit_azimuth = (
+                azimuth + 2 * math.pi * camera_config.orbit_revolutions * fraction
+            )
+            location = [
+                float(center[0] + distance * math.cos(elevation) * math.cos(orbit_azimuth)),
+                float(center[1] + distance * math.cos(elevation) * math.sin(orbit_azimuth)),
+                float(center[2] + distance * math.sin(elevation)),
+            ]
+            keyframes.append(
+                {
+                    "frame": frame,
+                    "location": location,
+                    "look_at": center_point,
+                    "up": up_vector,
+                }
+            )
+
+    if not keyframes:
+        # Static (also the fallback when follow/orbit produced nothing).
+        location = [float(center[i] + offset[i]) for i in range(3)]
+        keyframes = [
+            {
+                "frame": frame_start,
+                "location": location,
+                "look_at": center_point,
+                "up": up_vector,
+            }
+        ]
+
+    return {
+        "type": "perspective",
+        "lens_mm": camera_config.lens_mm,
+        "keyframes": keyframes,
+    }
+
+
+# =============================================================================
 # Orchestration
 # =============================================================================
 def export_scene_to_blender(
@@ -946,7 +1128,9 @@ def export_scene_to_blender(
         },
         "render": config.render.to_dict(),
         "world": {"preset": config.world_preset},
-        "camera": None,  # TODO: derive from camera.py / bounds in a later slice
+        "camera": _compute_camera_manifest(
+            config.camera, running_bounds, render_times, config.frame_start, scene
+        ),
         "objects": object_entries,
         "annotations": {
             "title": scene.title,

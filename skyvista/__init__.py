@@ -125,6 +125,7 @@ from . import animation
 # Blender export configuration (the backend itself is imported lazily by
 # Scene.to_blender so the optional 'alembic3d' dep is only needed on export).
 from .blender import (
+    BlenderCameraConfig,
     BlenderExportConfig,
     BlenderRenderConfig,
     BlenderTransform,
@@ -201,6 +202,7 @@ __all__ = [
     "presets",
     "animation",
     # Blender export
+    "BlenderCameraConfig",
     "BlenderExportConfig",
     "BlenderRenderConfig",
     "BlenderTransform",
