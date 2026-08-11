@@ -64,7 +64,11 @@ SKYVISTA_MANIFEST_VERSION = "0.1"
 # Blender's Alembic importer only reads recognised typed params (colors, UVs,
 # velocities). We carry the baked colormap under this name; it becomes a
 # Blender Color Attribute of the same name.
-VERTEX_COLOR_ATTRIBUTE_NAME = "color"
+#
+# NOT "color": that name collides with a reserved/implicit attribute in Cycles,
+# which then renders the mesh uncoloured (grey) while EEVEE reads it fine. A
+# distinct name ("col_data") is read correctly by both engines.
+VERTEX_COLOR_ATTRIBUTE_NAME = "col_data"
 
 # Default colormap when an appearance requests scalar coloring but names none.
 DEFAULT_COLORMAP_NAME = "viridis"

@@ -13,7 +13,7 @@ It reads the bundle's ``scene.json`` and assembles a ``.blend``:
   parented to it so the geometry stays in physical units and the whole figure
   is one movable/scalable Blender-native unit;
 * Alembic mesh sequences imported via Mesh Sequence Cache modifiers, with a
-  material that reads the baked per-vertex "color" attribute (or a solid color);
+  material that reads the baked per-vertex "col_data" attribute (or a solid color);
 * VDB volume sequences with a Principled Volume shader whose density and color
   are driven by the named grid through a color ramp rebuilt from the bundle's
   colormap LUT;
@@ -217,7 +217,10 @@ def make_surface_material(name, material_spec):
     if coloring.get("mode") == "vertex_color":
         # Read the baked per-vertex color attribute into Base Color.
         attribute_node = node_tree.nodes.new("ShaderNodeAttribute")
-        attribute_node.attribute_name = coloring.get("attribute", "color")
+        # The manifest names the baked color attribute (default "col_data" --
+        # NOT "color", which collides with a reserved attribute in Cycles and
+        # renders grey there while EEVEE looks fine).
+        attribute_node.attribute_name = coloring.get("attribute", "col_data")
         attribute_node.location = (-350, 0)
         if principled is not None:
             node_tree.links.new(
@@ -342,12 +345,25 @@ def import_alembic_object(bundle_dir, object_spec, root_empty):
     if not imported:
         raise RuntimeError(f"Alembic import produced no object: {abc_path}")
 
+    # Heterogeneous (changing vertex/face count) sequences must NOT vertex-
+    # interpolate: the Mesh Sequence Cache modifier defaults to interpolation
+    # on, which corrupts geometry between frames of differing vertex count (and
+    # would garble the baked per-vertex colors). Turn it off for those; a
+    # homogeneous sequence can keep interpolation for smoother sub-frames.
+    is_heterogeneous = geometry.get("topology") == "heterogeneous"
+
     material = make_surface_material(object_spec["name"], object_spec["material"])
     for imported_object in imported:
         imported_object.name = object_spec["name"]
         parent_keep_local(imported_object, root_empty)
         imported_object.data.materials.clear()
         imported_object.data.materials.append(material)
+        if is_heterogeneous:
+            for modifier in imported_object.modifiers:
+                if modifier.type == "MESH_SEQUENCE_CACHE" and hasattr(
+                    modifier, "use_vertex_interpolation"
+                ):
+                    modifier.use_vertex_interpolation = False
     return imported
 
 
