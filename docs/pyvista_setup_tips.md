@@ -1,54 +1,102 @@
-# Pyvista setup tips
+# PyVista setup tips
 
-Setting up pyvista can be a bit onerous depending on your specific configuration—whether you're using a remote machine, whether you're using jupyter from within VSCode, etc. The [PyVista installation docs](https://docs.pyvista.org/getting-started/installation), and the [section on remote machines specifically](https://docs.pyvista.org/getting-started/installation#running-on-remote-servers) if that's your use case, are the place to start. With that said, I found that I fell into several gaps following those docs directly, and so I've compiled further setup tips here. Perhaps one day everything will run in docker containers and none of this will be necessary.
+Setting up PyVista used to be onerous on remote/headless machines. With modern
+VTK (>= 9.3) most of that pain is gone: VTK can render **offscreen with no X
+server at all**, and skyvista auto-configures it for you. This page describes the
+easy path first, then keeps the legacy Xvfb instructions at the bottom for the
+rare cases that still need them.
 
-### Testing whether PyVista works
-As you work through everything below this point, the simplest way to test if PyVista/skyvista are working is to produce a simple render. Here is some example code that provides a simple test; if you see a bunny and can move/rotate it, you're in business:
+## TL;DR — check whether it already works
+
+After installing skyvista, run the built-in environment doctor:
+
+```bash
+python -m skyvista        # or, in Python:  import skyvista as sv; sv.doctor()
+```
+
+It runs a real offscreen render and tells you the active backend and whether the
+image came back non-blank, with a specific fix for anything that's wrong. If you
+see `✔ offscreen render` you can write figures/animations to disk immediately —
+no `DISPLAY`, no `Xvfb`, no admin-installed system libraries.
+
+A second quick check is to render the PyVista sample bunny; if you see it (and,
+interactively, can rotate it), you're in business:
 
 ```python
 from pyvista import examples
-dataset = examples.download_bunny()
-dataset.plot(cpos='xy')
+examples.download_bunny().plot(cpos="xy")
 ```
 
-## **Setup required pyvista system libraries**
+## How offscreen rendering works now
 
-First install any required system packages from [the documentation](https://docs.pyvista.org/version/stable/getting-started/installation.html#running-on-remote-servers); if running on a remote server, this should be `python-qt4, libgl1-mesa-glx, and xvfb` . You need sudo privileges to install these, and so you may need to ask an administrator to install them. The last time I did this there was some issue installing `python-qt4` that made it seem like it was outdated for the system, but it works fine without it, so I think don’t worry if you run into problems with that one.
+Modern VTK wheels ship with two X-free rendering backends and pick one
+automatically:
 
-Once installed, run the following two commands (or ideally add them to your bash profile):
+- **EGL** — GPU rendering with no X server. Used automatically when the node has
+  a GPU + drivers. This is the ideal case on a compute server.
+- **OSMesa** — CPU software rendering, no GPU and no X server. The universal
+  fallback that works anywhere. If your VTK build doesn't include it, install an
+  OSMesa-enabled VTK (e.g. the conda-forge `vtk` osmesa variant, or the
+  `vtk-osmesa` wheel).
 
-`export DISPLAY=:99.0`
+skyvista handles the setup for you: on `import skyvista` it detects a headless
+environment, enables offscreen mode (`PYVISTA_OFF_SCREEN`), and clears a **stale
+`DISPLAY`** — a dead `Xvfb` pointer like `:99.0` left in a shell profile — so VTK
+takes the clean EGL/OSMesa path instead of first failing to reach X and printing
+a confusing "bad X server connection" warning.
 
-`export PYVISTA_OFF_SCREEN=true`
+- Opt out of the auto-setup with `SKYVISTA_NO_AUTOCONFIG=1` before importing.
+- Override anything explicitly with `skyvista.configure(...)` (see its docstring
+  for `off_screen`, `jupyter_backend`, `server_proxy`, ...).
 
-Assuming you are running this for the first time, start the X server:
+## Interactive plots inside Jupyter
 
-`Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &`
+Writing to disk "just works" as above. Getting **live, interactive** plots inside
+a notebook is the part that can still need a nudge, and the fix differs by
+frontend.
 
-**You will need to run this command every time the server is restarted**.
+### VSCode
 
-If you encounter issues, you may need to delete the lock files, which are in `/tmp` and may be called `.X99-lock` or might be in a subdirectory.
+If interactive PyVista plots show up blank in VSCode's notebook, it's a
+port-forwarding quirk ([PyVista #5296](https://github.com/pyvista/pyvista/issues/5296)).
+Two settings fix it:
 
-## Using jupyter
-Most of `skyvista` and its documentation assume you will be running pyvista within jupyter. Instructions will vary based on whether you do this in a web browser vs using the built-in VSCode jupyter client. In general, I think the latter should be preferred (and that is my current setup), and so my notes on how to use it from a browser may be outdated.
-
-### From VSCode
-
-If you try to use PyVista in VSCode jupyter "naively", i.e. assuming it should work without several opaque configuration adjustments, you would be just as foolish as I was. My initial experience of trying to plot PyVista scenes this way was just getting a blank render window. This is especially confounding as there are ultimately several fixes required.
-
-The first fix has to do with port forwarding in some way; I have not dug into the details, but there is discussion of the issue and [the solution](https://github.com/pyvista/pyvista/issues/5296#issuecomment-1971079419) in [an open PyVista bug report from 2023](https://github.com/pyvista/pyvista/issues/5296). All you need to do is set the following VSCode settings to the following values:
 - `remote.autoForwardPortsSource`: `process`
 - `remote.localPortHost`: `localhost`
 
-The second required fix is after attempting to render a PyVista scene, when you will presumably still get a blank render window. Like the first fix, [the solution](https://github.com/pyvista/pyvista/issues/5296#issuecomment-2374315543) also comes from a comment in an [open PyVista bug report](https://github.com/pyvista/pyvista/issues/5296). The video just linked does a better job showing what to do than I could describe; you just need to toggle the output type of the cell back and forth once. For me, this fix generally persists until I reload the VSCode window, so it's not overly annoying.
+Then, after running a plotting cell that comes up blank, toggle the cell's output
+type back and forth once ([demo](https://github.com/pyvista/pyvista/issues/5296#issuecomment-2374315543)).
+For me this persists until the VSCode window is reloaded.
 
-### From a browser
-When running jupyter within a browser, PyVista rquires the use of the `jupyter_server_proxy` package and some boilerplate. Install the package; you will then need to run the following two lines at the top of every notebook, after importing pyvista/skyvista:
+### Browser Jupyter behind a proxy
+
+When Jupyter is served in a browser behind a proxy, PyVista's trame backend needs
+`server_proxy` mode. skyvista wraps the boilerplate:
 
 ```python
-pv.global_theme.trame.server_proxy_enabled = True
-pv.global_theme.trame.server_proxy_prefix = "/proxy/"
-pv.set_jupyter_backend('trame')
+import skyvista as sv
+sv.configure(server_proxy=True, server_proxy_prefix="/proxy/")
 ```
 
-and then it should work as normal.
+(Equivalent to setting `pv.global_theme.trame.server_proxy_enabled = True`, the
+prefix, and `pv.set_jupyter_backend("trame")` by hand.)
+
+## Legacy: the Xvfb path (only if you can't get EGL/OSMesa)
+
+You should not need this with a modern VTK. It's here for old VTK builds, or a
+CPU-only node whose VTK lacks OSMesa, where a virtual X display is the last
+resort.
+
+Install the system packages (needs sudo — ask an admin):
+`libgl1-mesa-glx` and `xvfb` (the old docs also mention `python-qt4`, which is
+outdated and unnecessary).
+
+```bash
+export DISPLAY=:99.0
+export PYVISTA_OFF_SCREEN=true
+Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &   # rerun after every reboot
+```
+
+If you hit lock-file errors, delete `/tmp/.X99-lock` (or the matching file under
+`/tmp/.X11-unix/`). From Python you can instead call `pyvista.start_xvfb()`.
+Whenever possible, prefer the EGL/OSMesa path above and skip all of this.

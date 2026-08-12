@@ -27,6 +27,18 @@ from pathlib import Path
 SKYVISTA_ROOT_DIR = Path(__file__).parent.parent
 
 # =============================================================================
+# HEADLESS RENDERING SETUP
+# =============================================================================
+# Auto-configure offscreen rendering BEFORE PyVista is first imported (below,
+# via .scene), so PYVISTA_OFF_SCREEN is in place when PyVista reads it. On a
+# headless server this makes rendering work with no Xvfb/DISPLAY setup; opt out
+# with SKYVISTA_NO_AUTOCONFIG=1. See skyvista.configure() / skyvista.doctor().
+from .headless import configure, doctor, has_working_display
+from .headless import _autoconfigure_on_import as _sv_autoconfigure_on_import
+
+_sv_autoconfigure_on_import()
+
+# =============================================================================
 # PRIMARY API
 # =============================================================================
 
@@ -201,6 +213,10 @@ __all__ = [
     "PVMesh",
     "presets",
     "animation",
+    # Headless rendering setup / diagnostics
+    "configure",
+    "doctor",
+    "has_working_display",
     # Blender export
     "BlenderCameraConfig",
     "BlenderExportConfig",

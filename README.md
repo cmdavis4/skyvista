@@ -29,7 +29,19 @@ First install skyvista, which will install pyvista as a dependency:
 pip install skyvista
 ```
 
-From here, pyvista configuration may be complicated depending on your setup. We recommend following the [pyvista installation documentation](https://docs.pyvista.org/getting-started/installation.html) and ensuring that you can successfully create an interactive bunny visualization, following the documentation's example:
+On a modern VTK (>= 9.3), rendering to disk on a headless machine works with no
+extra setup: skyvista auto-configures offscreen rendering (EGL on a GPU, OSMesa
+on CPU) when you `import skyvista`. To verify your environment, run the built-in
+doctor, which does a real offscreen render and prints an actionable fix for
+anything that's wrong:
+
+```bash
+python -m skyvista        # or:  import skyvista as sv; sv.doctor()
+```
+
+Live *interactive* plots inside Jupyter can still need a per-frontend nudge (and
+some setups need an OSMesa VTK build); see [docs/pyvista_setup_tips.md](docs/pyvista_setup_tips.md)
+for the details. You can also sanity-check PyVista directly with its sample bunny:
 
 ```python
 from pyvista import examples
