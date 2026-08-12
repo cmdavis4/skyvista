@@ -651,7 +651,7 @@ class Scene:
         times: Optional[List[Any]] = None,
         build: bool = False,
         render: bool = False,
-        blender_executable: str = "blender",
+        blender_executable: Optional[PathLike] = None,
     ) -> "Scene":
         """
         Export to a self-contained Blender bundle directory.
@@ -675,8 +675,10 @@ class Scene:
             build: If True, run Blender headlessly to assemble the ``.blend``.
             render: If True, also render the animation to ``<path>/render/`` in
                 the same headless Blender run. Implies ``build``.
-            blender_executable: Blender command used when ``build``/``render``
-                is True.
+            blender_executable: Path to the Blender binary for ``build``/
+                ``render``. When None, skyvista resolves it from (in order) the
+                ``SKYVISTA_BLENDER`` environment variable, then ``blender`` on
+                ``PATH``. Pass an explicit path to override both.
 
         Returns:
             self (for method chaining)

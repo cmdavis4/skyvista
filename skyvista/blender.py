@@ -113,9 +113,11 @@ class BlenderTransform:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "origin_shift": list(self.origin_shift)
-            if self.origin_shift is not None
-            else None,
+            "origin_shift": (
+                list(self.origin_shift)
+                if self.origin_shift is not None
+                else None
+            ),
             "scale": self.scale,
             "z_exaggeration": self.z_exaggeration,
         }
@@ -219,7 +221,7 @@ class BlenderExportConfig:
 # =============================================================================
 def bake_scalar_to_rgb(
     scalar_values: np.ndarray,
-    colormap_name: str,
+    colormap: str,
     color_limits: Tuple[float, float],
 ) -> np.ndarray:
     """
@@ -242,11 +244,17 @@ def bake_scalar_to_rgb(
     import matplotlib
     from matplotlib.colors import Normalize
 
-    colormap = matplotlib.colormaps[colormap_name]
+    colormap = (
+        matplotlib.colormaps[colormap]
+        if isinstance(colormap, str)
+        else colormap
+    )
     normalize_to_unit_interval = Normalize(
         vmin=color_limits[0], vmax=color_limits[1]
     )
-    rgba_values = colormap(normalize_to_unit_interval(np.asarray(scalar_values)))
+    rgba_values = colormap(
+        normalize_to_unit_interval(np.asarray(scalar_values))
+    )
     return np.ascontiguousarray(rgba_values[:, :3], dtype=np.float32)
 
 
@@ -390,7 +398,9 @@ def pyvista_mesh_to_frame(
     if faces_flat.size == 0:
         triangle_vertex_indices = np.zeros((0, 3), dtype=np.int32)
     else:
-        triangle_vertex_indices = faces_flat.reshape(-1, 4)[:, 1:4].astype(np.int32)
+        triangle_vertex_indices = faces_flat.reshape(-1, 4)[:, 1:4].astype(
+            np.int32
+        )
 
     scalar_values: Optional[np.ndarray] = None
     if scalar_name is not None and scalar_name in triangulated.point_data:
@@ -420,10 +430,10 @@ def _require_alembic():
         import alembic3d  # noqa: F401
     except ImportError as import_error:  # pragma: no cover - env dependent
         raise ImportError(
-            "The Blender export backend requires the 'blender' extra:\n"
-            "    pip install skyvista[blender]\n"
-            "This installs 'alembic3d' (the 3D Alembic bindings). Do NOT install "
-            "'alembic' -- that is the unrelated SQLAlchemy database tool."
+            "The Blender export backend requires the 'blender' extra:\n    pip"
+            " install skyvista[blender]\nThis installs 'alembic3d' (the 3D"
+            " Alembic bindings). Do NOT install 'alembic' -- that is the"
+            " unrelated SQLAlchemy database tool."
         ) from import_error
     return alembic3d, imath
 
@@ -597,7 +607,9 @@ def _coloring_scalar_name(spec: "VarSpec") -> Optional[str]:
         return geometry.scalar  # may be None -> solid color
     if isinstance(spec, VectorSpec):
         return geometry.scale_by  # may be None -> fall back to active scalar
-    return getattr(geometry, "scalar", None) or getattr(geometry, "varname", None)
+    return getattr(geometry, "scalar", None) or getattr(
+        geometry, "varname", None
+    )
 
 
 def _build_object_entry(
@@ -618,7 +630,9 @@ def _build_object_entry(
     from .varspec import VolumeSpec
 
     if isinstance(spec, VolumeSpec):
-        return _build_volume_entry(spec, dataset, times, data_subdir, running_bounds)
+        return _build_volume_entry(
+            spec, dataset, times, data_subdir, running_bounds
+        )
     return _build_mesh_entry(
         spec, dataset, times, data_subdir, fps, running_bounds
     )
@@ -660,8 +674,12 @@ def _build_mesh_entry(
         frames.append(frame)
         running_bounds = _accumulate_bounds(running_bounds, frame.points_xyz)
         if frame.scalar_values is not None and len(frame.scalar_values) > 0:
-            global_scalar_min = min(global_scalar_min, float(frame.scalar_values.min()))
-            global_scalar_max = max(global_scalar_max, float(frame.scalar_values.max()))
+            global_scalar_min = min(
+                global_scalar_min, float(frame.scalar_values.min())
+            )
+            global_scalar_max = max(
+                global_scalar_max, float(frame.scalar_values.max())
+            )
 
     # ---- Decide coloring: solid color, or baked colormap from the scalar
     uses_scalar_coloring = (
@@ -671,15 +689,15 @@ def _build_mesh_entry(
     )
 
     color_limits: Optional[Tuple[float, float]] = None
-    colormap_name: Optional[str] = None
+    colormap = None
     if uses_scalar_coloring:
         color_limits = appearance.clim or (global_scalar_min, global_scalar_max)
-        colormap_name = appearance.cmap or DEFAULT_COLORMAP_NAME
+        colormap = appearance.cmap or DEFAULT_COLORMAP_NAME
         # ---- Pass 2: bake per-vertex colors with the fixed global range
         for frame in frames:
             if frame.scalar_values is not None and len(frame.scalar_values) > 0:
                 frame.rgb_values = bake_scalar_to_rgb(
-                    frame.scalar_values, colormap_name, color_limits
+                    frame.scalar_values, colormap, color_limits
                 )
 
     # ---- Write the Alembic sequence
@@ -707,7 +725,7 @@ def _build_mesh_entry(
         material["coloring"] = {
             "mode": "vertex_color",
             "attribute": VERTEX_COLOR_ATTRIBUTE_NAME,
-            "cmap": colormap_name,
+            "cmap": colormap,
             "clim": list(color_limits),
             "label": colorbar_label,
         }
@@ -860,11 +878,14 @@ def _build_volume_entry(
     y_name = coordinate_names["y"]
     z_name = coordinate_names["z"]
     for coordinate_name in (x_name, y_name, z_name):
-        if coordinate_name not in dataset.coords or dataset[coordinate_name].ndim != 1:
+        if (
+            coordinate_name not in dataset.coords
+            or dataset[coordinate_name].ndim != 1
+        ):
             raise NotImplementedError(
-                "VDB volume export requires a rectilinear grid with 1-D x/y/z "
-                f"coordinates; '{coordinate_name}' is missing or multi-dimensional. "
-                "Resample to a uniform grid first."
+                "VDB volume export requires a rectilinear grid with 1-D x/y/z"
+                f" coordinates; '{coordinate_name}' is missing or"
+                " multi-dimensional. Resample to a uniform grid first."
             )
 
     x_coordinates = dataset[x_name].values
@@ -902,9 +923,13 @@ def _build_volume_entry(
         if spec.geometry.threshold:
             low_threshold, high_threshold = spec.geometry.threshold
             if low_threshold is not None:
-                dense_array = np.where(dense_array < low_threshold, 0.0, dense_array)
+                dense_array = np.where(
+                    dense_array < low_threshold, 0.0, dense_array
+                )
             if high_threshold is not None:
-                dense_array = np.where(dense_array > high_threshold, 0.0, dense_array)
+                dense_array = np.where(
+                    dense_array > high_threshold, 0.0, dense_array
+                )
         dense_array = np.nan_to_num(dense_array, nan=0.0)
         frame_arrays.append(dense_array)
 
@@ -927,7 +952,10 @@ def _build_volume_entry(
     object_subdir = data_subdir / spec.name
     object_subdir.mkdir(parents=True, exist_ok=True)
     write_volume_sequence_vdb(
-        object_subdir, frame_arrays, grid_name=varname, transform_matrix=transform_matrix
+        object_subdir,
+        frame_arrays,
+        grid_name=varname,
+        transform_matrix=transform_matrix,
     )
     # Blender picks the sequence up from the '####' numbered pattern.
     path_pattern = f"data/{spec.name}/{varname}_####.vdb"
@@ -1029,13 +1057,11 @@ def _compute_camera_manifest(
     # Unit view direction from azimuth/elevation, then the camera offset vector.
     azimuth = math.radians(camera_config.azimuth_deg)
     elevation = math.radians(camera_config.elevation_deg)
-    offset = np.array(
-        [
-            distance * math.cos(elevation) * math.cos(azimuth),
-            distance * math.cos(elevation) * math.sin(azimuth),
-            distance * math.sin(elevation),
-        ]
-    )
+    offset = np.array([
+        distance * math.cos(elevation) * math.cos(azimuth),
+        distance * math.cos(elevation) * math.sin(azimuth),
+        distance * math.sin(elevation),
+    ])
 
     n_times = len(render_times)
     frame_end = frame_start + max(n_times - 1, 0)
@@ -1061,48 +1087,51 @@ def _compute_camera_manifest(
             for time_index, (feature_x, feature_y) in enumerate(track):
                 look_at = [feature_x, feature_y, float(center[2])]
                 location = [look_at[i] + float(offset[i]) for i in range(3)]
-                keyframes.append(
-                    {
-                        "frame": frame_start + time_index,
-                        "location": location,
-                        "look_at": look_at,
-                        "up": up_vector,
-                    }
-                )
+                keyframes.append({
+                    "frame": frame_start + time_index,
+                    "location": location,
+                    "look_at": look_at,
+                    "up": up_vector,
+                })
 
     if mode == "orbit" and n_times > 1:
         n_keyframes = max(2, camera_config.n_orbit_keyframes)
         for keyframe_index in range(n_keyframes):
             fraction = keyframe_index / (n_keyframes - 1)
-            frame = int(round(frame_start + fraction * (frame_end - frame_start)))
+            frame = int(
+                round(frame_start + fraction * (frame_end - frame_start))
+            )
             orbit_azimuth = (
-                azimuth + 2 * math.pi * camera_config.orbit_revolutions * fraction
+                azimuth
+                + 2 * math.pi * camera_config.orbit_revolutions * fraction
             )
             location = [
-                float(center[0] + distance * math.cos(elevation) * math.cos(orbit_azimuth)),
-                float(center[1] + distance * math.cos(elevation) * math.sin(orbit_azimuth)),
+                float(
+                    center[0]
+                    + distance * math.cos(elevation) * math.cos(orbit_azimuth)
+                ),
+                float(
+                    center[1]
+                    + distance * math.cos(elevation) * math.sin(orbit_azimuth)
+                ),
                 float(center[2] + distance * math.sin(elevation)),
             ]
-            keyframes.append(
-                {
-                    "frame": frame,
-                    "location": location,
-                    "look_at": center_point,
-                    "up": up_vector,
-                }
-            )
+            keyframes.append({
+                "frame": frame,
+                "location": location,
+                "look_at": center_point,
+                "up": up_vector,
+            })
 
     if not keyframes:
         # Static (also the fallback when follow/orbit produced nothing).
         location = [float(center[i] + offset[i]) for i in range(3)]
-        keyframes = [
-            {
-                "frame": frame_start,
-                "location": location,
-                "look_at": center_point,
-                "up": up_vector,
-            }
-        ]
+        keyframes = [{
+            "frame": frame_start,
+            "location": location,
+            "look_at": center_point,
+            "up": up_vector,
+        }]
 
     return {
         "type": "perspective",
@@ -1121,7 +1150,7 @@ def export_scene_to_blender(
     times: Optional[List[Any]] = None,
     build: bool = False,
     render: bool = False,
-    blender_executable: str = "blender",
+    blender_executable: Optional[PathLike] = None,
 ) -> Path:
     """
     Export a whole Scene to a self-contained Blender bundle directory.
@@ -1183,15 +1212,13 @@ def export_scene_to_blender(
                 tuple(coloring["clim"]),
                 coloring.get("label", ""),
             )
-            colorbar_annotations.append(
-                {
-                    "for": object_entry["name"],
-                    "cmap": coloring["cmap"],
-                    "clim": coloring["clim"],
-                    "label": coloring.get("label", ""),
-                    "image": colorbar_image,
-                }
-            )
+            colorbar_annotations.append({
+                "for": object_entry["name"],
+                "cmap": coloring["cmap"],
+                "clim": coloring["clim"],
+                "label": coloring.get("label", ""),
+                "image": colorbar_image,
+            })
 
     # ---- Assemble the manifest
     manifest = {
@@ -1201,9 +1228,11 @@ def export_scene_to_blender(
             "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
         },
         "transform": {
-            "origin_shift": list(resolved_origin_shift)
-            if resolved_origin_shift is not None
-            else [0.0, 0.0, 0.0],
+            "origin_shift": (
+                list(resolved_origin_shift)
+                if resolved_origin_shift is not None
+                else [0.0, 0.0, 0.0]
+            ),
             "scale": transform.scale,
             "z_exaggeration": transform.z_exaggeration,
         },
@@ -1216,7 +1245,11 @@ def export_scene_to_blender(
         "render": config.render.to_dict(),
         "world": {"preset": config.world_preset},
         "camera": _compute_camera_manifest(
-            config.camera, running_bounds, render_times, config.frame_start, scene
+            config.camera,
+            running_bounds,
+            render_times,
+            config.frame_start,
+            scene,
         ),
         "objects": object_entries,
         "annotations": {
@@ -1263,8 +1296,52 @@ def _copy_build_script(bundle_dir: Path) -> Path:
     return destination
 
 
+def _resolve_blender_executable(explicit: Optional[PathLike] = None) -> str:
+    """
+    Locate the Blender executable, in priority order:
+
+    1. an explicit path/name passed by the caller (``blender_executable=...``),
+    2. the ``SKYVISTA_BLENDER`` environment variable,
+    3. ``blender`` on ``PATH``.
+
+    Returns an **absolute** path, so the subprocess does not depend on inheriting
+    ``PATH``. That inheritance is exactly what usually breaks this: an IDE or a
+    Jupyter kernel is typically launched with a minimal ``PATH`` that does not
+    include wherever Blender lives (e.g. ``~/programs``), even when your shell
+    profile adds it -- login-shell ``PATH`` edits don't reach those processes.
+
+    Raises ``FileNotFoundError`` with actionable guidance if none resolve.
+    """
+    import os
+    import shutil
+
+    candidates = [
+        str(explicit),
+        os.environ.get("SKYVISTA_BLENDER"),
+        "blender",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        # shutil.which handles both a bare name (searched on PATH) and an
+        # absolute/relative path (returned if it exists and is executable).
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+
+    raise FileNotFoundError(
+        "Could not find the Blender executable. Set it in any of these ways:\n"
+        "  - pass blender_executable='/path/to/blender' to"
+        " Scene.to_blender(...)\n  - export SKYVISTA_BLENDER=/path/to/blender"
+        " in the environment that\n    launches Python (note: an IDE/Jupyter"
+        " kernel may not read your\n    shell profile, so setting it there is"
+        " more reliable than PATH)\n  - put 'blender' on PATH\nTried:"
+        f" {[c for c in candidates if c]}"
+    )
+
+
 def _launch_blender_build(
-    blender_executable: str,
+    blender_executable: Optional[PathLike],
     build_script_path: Path,
     bundle_dir: Path,
     render: bool = False,
@@ -1274,11 +1351,13 @@ def _launch_blender_build(
 
     ``blender --background --python build_scene.py -- <bundle> [--render]``.
     With ``render`` the build also renders the animation to ``<bundle>/render/``.
+    ``blender_executable`` is resolved via :func:`_resolve_blender_executable`.
     """
     import subprocess
 
+    resolved_executable = _resolve_blender_executable(blender_executable)
     command = [
-        blender_executable,
+        resolved_executable,
         "--background",
         "--python",
         str(build_script_path),
