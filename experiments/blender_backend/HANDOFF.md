@@ -172,7 +172,8 @@ editable-scalar storage-type verdict.
   "time": { "fps": 24, "frame_start": 1, "frame_end": N, "data_times": [...] },
   "render": { "engine": "CYCLES", "samples": 128, "resolution": [1920,1080],
               "view_transform": "Standard", "film_transparent": true },
-  "world": { "preset": "studio" },
+  "world": { "preset": "sky", "sun_elevation_deg": 35.0, "sun_azimuth_deg": 40.0,
+             "sun_strength": 2.0, "background_strength": 1.0 },
   "camera": { "type": "perspective", "lens_mm": 50,
               "keyframes": [ { "frame": 1, "location": [...], "look_at": [...], "up": [0,0,1] } ] },
   "objects": [

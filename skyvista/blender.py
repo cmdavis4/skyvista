@@ -192,6 +192,60 @@ class BlenderCameraConfig:
     )
 
 
+# Named world/lighting looks the build script knows how to construct. Kept here
+# (rather than only on the Blender side) so callers get validated names and so
+# the set is documented in one place.
+WORLD_PRESETS = ("sky", "studio", "dark", "white")
+
+
+@dataclass
+class BlenderWorldConfig:
+    """
+    World background and key-light configuration.
+
+    A "preset" picks the overall look; the sun_* / background_strength knobs
+    then tune it. All presets place a single key Sun lamp aimed from
+    (sun_elevation_deg, sun_azimuth_deg) so shadows are consistent regardless of
+    the background, and the "sky" preset additionally points Blender's Nishita
+    physical-sky sun in that same direction.
+
+    Attributes:
+        preset: One of :data:`WORLD_PRESETS`:
+            - "sky": Nishita physical daytime sky, with the key sun aligned to
+              the sky's sun. Best default for outdoor atmospheric scenes.
+            - "studio": neutral mid-gray environment + soft key sun. Isolates the
+              figure with no distracting background (product-shot look).
+            - "dark": near-black background + sun. Flatters glowing volumes and
+              emissive isosurfaces.
+            - "white": pure white background + sun. Clean look for print figures.
+        sun_elevation_deg: Sun height above the horizon in degrees (0 = on the
+            horizon, 90 = straight overhead). Drives both the key Sun lamp and,
+            for the "sky" preset, the Nishita sun.
+        sun_azimuth_deg: Sun compass direction in degrees, measured CCW from +x
+            about +z (0 = light coming from +x, 90 = from +y).
+        sun_strength: Irradiance of the key Sun lamp (Blender "Strength"/energy).
+        background_strength: Brightness of the *camera-visible* background (the
+            sky or backdrop). The background's contribution to *lighting* is
+            damped separately per preset so a bright sky/backdrop can't wash the
+            baked scientific colors to white; see the build script's setup_world.
+    """
+
+    preset: str = "sky"
+    sun_elevation_deg: float = 35.0
+    sun_azimuth_deg: float = 40.0
+    sun_strength: float = 2.0
+    background_strength: float = 1.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "preset": self.preset,
+            "sun_elevation_deg": self.sun_elevation_deg,
+            "sun_azimuth_deg": self.sun_azimuth_deg,
+            "sun_strength": self.sun_strength,
+            "background_strength": self.background_strength,
+        }
+
+
 @dataclass
 class BlenderExportConfig:
     """
@@ -201,19 +255,18 @@ class BlenderExportConfig:
         transform: The single spatial transform (see :class:`BlenderTransform`).
         render: Render-level settings (see :class:`BlenderRenderConfig`).
         camera: Camera placement/animation (see :class:`BlenderCameraConfig`).
+        world: World background + key-light look (see :class:`BlenderWorldConfig`).
         fps: Frames per second the animation advertises; also the rate at which
             Alembic samples are spaced in time.
         frame_start: First Blender frame number.
-        world_preset: Named lighting/world preset for a decent out-of-the-box
-            look without Blender knowledge (interpreted on the Blender side).
     """
 
     transform: BlenderTransform = field(default_factory=BlenderTransform)
     render: BlenderRenderConfig = field(default_factory=BlenderRenderConfig)
     camera: BlenderCameraConfig = field(default_factory=BlenderCameraConfig)
+    world: BlenderWorldConfig = field(default_factory=BlenderWorldConfig)
     fps: float = 24.0
     frame_start: int = 1
-    world_preset: str = "studio"
 
 
 # =============================================================================
@@ -1267,7 +1320,7 @@ def export_scene_to_blender(
             "data_times": [_json_safe_time(t) for t in render_times],
         },
         "render": config.render.to_dict(),
-        "world": {"preset": config.world_preset},
+        "world": config.world.to_dict(),
         "camera": _compute_camera_manifest(
             config.camera,
             running_bounds,

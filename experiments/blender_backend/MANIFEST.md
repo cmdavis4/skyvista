@@ -69,8 +69,20 @@ storm_figure/
     "view_transform": "Standard"     // data-faithful color; NOT AgX/Filmic
   },
 
-  // Either a named preset or explicit lights (both applied after transform).
-  "world": { "preset": "studio", "hdri": "assets/hdri/studio.exr", "strength": 1.0 },
+  // World background + key light. `preset` is one of "sky" (Nishita physical
+  // sky, sun aligned to it), "studio" (neutral gray), "dark", or "white". The
+  // sun_* / background_strength knobs tune the chosen preset. Built by
+  // build_scene.py:setup_world().
+  "world": {
+    "preset": "sky",
+    "sun_elevation_deg": 35.0,   // sun height above horizon (also drives sky)
+    "sun_azimuth_deg": 40.0,     // sun compass direction, CCW from +x about +z
+    "sun_strength": 2.0,         // key Sun lamp irradiance
+    "background_strength": 1.0   // camera-visible background brightness; its
+                                 // *lighting* contribution is damped per preset
+                                 // (Is-Camera-Ray mix) so a bright sky doesn't
+                                 // wash the baked colors to white
+  },
   "lights": [],
 
   "camera": {

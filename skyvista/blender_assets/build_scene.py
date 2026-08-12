@@ -29,6 +29,7 @@ summary is printed at the end.
 """
 
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -453,20 +454,162 @@ def setup_camera(scene, manifest, transform, all_objects):
 # ---------------------------------------------------------------------------
 # World / lighting
 # ---------------------------------------------------------------------------
+# Flat (non-sky) presets: the World background is a single constant color and
+# the object is lit by the key sun plus a little ambient from this color.
+FLAT_WORLD_COLORS = {
+    "studio": (0.20, 0.20, 0.21, 1.0),  # neutral mid-gray, product-shot look
+    "dark": (0.02, 0.02, 0.03, 1.0),  # near-black, flatters glowing volumes
+    "white": (1.0, 1.0, 1.0, 1.0),  # clean print-figure background
+}
+
+# How much each preset's background contributes to *lighting*, as a fraction of
+# its camera-visible strength. A physically bright environment (the sky, or a
+# white backdrop) otherwise blows out every upward/outward-facing surface and
+# washes the baked scientific colors to white; damping only the lighting rays
+# (see setup_world's Is-Camera-Ray mix) keeps the background bright to the camera
+# while letting the subject's color read. Values calibrated empirically in
+# Blender 5.0.1 against a mid-value surface. Presets whose background is already
+# dark ("dark", "studio") keep the full contribution (1.0).
+WORLD_LIGHT_FACTORS = {
+    "sky": 0.30,
+    "white": 0.15,
+    "studio": 1.0,
+    "dark": 1.0,
+}
+
+
+def aim_sun(sun_object, sun_elevation_deg, sun_azimuth_deg):
+    """
+    Orient a Sun lamp so its light arrives from a given sky direction.
+
+    A Blender Sun emits along its local -Z axis. At zero rotation that points
+    straight down (sun at the zenith). Tilting about X by (90 - elevation) drops
+    the apparent sun to the requested height above the horizon; rotating about Z
+    sets the compass azimuth. Euler order 'XYZ' applies the X tilt first, then
+    the Z azimuth, which is exactly what we want.
+    """
+    elevation = math.radians(sun_elevation_deg)
+    azimuth = math.radians(sun_azimuth_deg)
+    sun_object.rotation_euler = (math.pi / 2.0 - elevation, 0.0, azimuth)
+
+
+def make_sky_texture(nodes, sun_elevation_deg, sun_azimuth_deg):
+    """
+    Create a physically-based Sky Texture node aimed at the given sun direction.
+
+    The sky-model enum was renamed across Blender versions: 4.x exposes
+    "NISHITA", while 5.0 replaced it with "MULTIPLE_SCATTERING" (same underlying
+    model, same sun_* attributes). Pick the best physically-based model that is
+    actually available so this works on either. The Nishita parameters are node
+    attributes (not input sockets); set them defensively so a renamed attribute
+    in some Blender version can't abort the whole build.
+
+    The sky's own sun disc is disabled: the crisp key light comes from the
+    explicit, matched Sun lamp, while the sky still contributes realistic blue
+    skylight. This avoids a blown-out sun disc and doubled directional light.
+    """
+    sky = nodes.new("ShaderNodeTexSky")
+    available_sky_types = {
+        item.identifier for item in sky.bl_rna.properties["sky_type"].enum_items
+    }
+    for candidate in ("MULTIPLE_SCATTERING", "NISHITA", "HOSEK_WILKIE"):
+        if candidate in available_sky_types:
+            sky.sky_type = candidate
+            break
+    if hasattr(sky, "sun_elevation"):
+        sky.sun_elevation = math.radians(sun_elevation_deg)
+    if hasattr(sky, "sun_rotation"):
+        sky.sun_rotation = math.radians(sun_azimuth_deg)
+    if hasattr(sky, "sun_disc"):
+        sky.sun_disc = False
+    return sky
+
+
 def setup_world(scene, manifest):
-    """A simple, decent-looking world: soft gray ambient + a key sun."""
+    """
+    Build the world background + key light from the manifest's ``world`` block.
+
+    Presets:
+      - "sky":    Nishita physical daytime sky; the key sun is aligned to the
+                  sky's sun direction, and the sky's own sun disc is disabled so
+                  the crisp shadows come from the (single) Sun lamp while the sky
+                  still provides realistic blue ambient light.
+      - "studio": neutral mid-gray environment + soft key sun.
+      - "dark":   near-black background + sun (flatters glowing volumes).
+      - "white":  pure white background + sun (clean print look).
+    Unknown preset names fall back to "studio".
+
+    The background is wired so its *camera-visible* brightness and its *lighting*
+    contribution can differ: a Light Path "Is Camera Ray" node mixes a
+    full-strength background (what the camera sees) with a damped one (what
+    illuminates the scene). This keeps a bright, pretty sky/backdrop while
+    preventing it from washing the baked scientific colors to white -- the
+    over-exposure that a single bright environment otherwise causes.
+    """
+    # Read the world block with defaults matching BlenderWorldConfig.
+    world_block = manifest.get("world", {})
+    preset = world_block.get("preset", "studio")
+    sun_elevation_deg = world_block.get("sun_elevation_deg", 35.0)
+    sun_azimuth_deg = world_block.get("sun_azimuth_deg", 40.0)
+    sun_strength = world_block.get("sun_strength", 2.0)
+    background_strength = world_block.get("background_strength", 1.0)
+
+    # Fraction of the background strength that reaches lighting rays (see
+    # WORLD_LIGHT_FACTORS). Camera rays always see the full background_strength.
+    light_factor = WORLD_LIGHT_FACTORS.get(preset, 1.0)
+
+    # Fresh world; rebuild the node tree from scratch so the mix rig below is
+    # deterministic regardless of the default nodes a new world ships with.
     world = bpy.data.worlds.new("skyvista_world")
     scene.world = world
     world.use_nodes = True
-    background = world.node_tree.nodes.get("Background")
-    if background is not None:
-        background.inputs["Color"].default_value = (0.05, 0.05, 0.06, 1.0)
-        background.inputs["Strength"].default_value = 1.0
+    node_tree = world.node_tree
+    nodes = node_tree.nodes
+    links = node_tree.links
+    nodes.clear()
 
+    world_output = nodes.new("ShaderNodeOutputWorld")
+
+    # Background color source: physical sky for "sky", else a constant color.
+    if preset == "sky":
+        sky = make_sky_texture(nodes, sun_elevation_deg, sun_azimuth_deg)
+        color_output = sky.outputs["Color"]
+        constant_color = None
+    else:
+        color_output = None
+        constant_color = FLAT_WORLD_COLORS.get(preset, FLAT_WORLD_COLORS["studio"])
+
+    # Two Background shaders sharing the same color: one seen by the camera at
+    # full strength, one that lights the scene at a damped strength.
+    background_seen_by_camera = nodes.new("ShaderNodeBackground")
+    background_that_lights = nodes.new("ShaderNodeBackground")
+    background_seen_by_camera.inputs["Strength"].default_value = background_strength
+    background_that_lights.inputs["Strength"].default_value = (
+        background_strength * light_factor
+    )
+    if color_output is not None:
+        links.new(color_output, background_seen_by_camera.inputs["Color"])
+        links.new(color_output, background_that_lights.inputs["Color"])
+    else:
+        background_seen_by_camera.inputs["Color"].default_value = constant_color
+        background_that_lights.inputs["Color"].default_value = constant_color
+
+    # Mix by "Is Camera Ray": camera rays (fac=1) take the full background;
+    # lighting/indirect rays (fac=0) take the damped one. Mix Shader input[1] is
+    # the fac=0 shader and input[2] is the fac=1 shader.
+    light_path = nodes.new("ShaderNodeLightPath")
+    mix_shader = nodes.new("ShaderNodeMixShader")
+    links.new(light_path.outputs["Is Camera Ray"], mix_shader.inputs["Fac"])
+    links.new(background_that_lights.outputs["Background"], mix_shader.inputs[1])
+    links.new(background_seen_by_camera.outputs["Background"], mix_shader.inputs[2])
+    links.new(mix_shader.outputs["Shader"], world_output.inputs["Surface"])
+
+    # Key sun: one directional lamp, aimed from the configured sky direction so
+    # shadows are consistent regardless of which world preset is active.
     sun_data = bpy.data.lights.new("skyvista_sun", type="SUN")
-    sun_data.energy = 3.0
+    sun_data.energy = sun_strength
     sun_object = bpy.data.objects.new("skyvista_sun", sun_data)
-    sun_object.rotation_euler = (0.6, 0.2, 0.5)
+    aim_sun(sun_object, sun_elevation_deg, sun_azimuth_deg)
     scene.collection.objects.link(sun_object)
 
 
