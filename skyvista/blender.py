@@ -143,7 +143,7 @@ class BlenderRenderConfig:
     samples: int = 128
     resolution: Tuple[int, int] = (1920, 1080)
     view_transform: str = "Standard"
-    film_transparent: bool = True
+    film_transparent: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -471,6 +471,27 @@ def _numpy_rgb_to_c3f(imath, rgb_values: np.ndarray):
     return color_array
 
 
+def _zup_to_yup(points_xyz: np.ndarray) -> np.ndarray:
+    """
+    Rotate Z-up data coordinates into the Y-up convention Alembic expects.
+
+    Blender's Alembic importer assumes the file is Y-up and rotates it to its
+    own Z-up on import: file (x, y, z) -> Blender (x, -z, y). Our data is
+    already Z-up, so writing it verbatim comes out mis-rotated (the vertical
+    axis lands on -Y and, once the parent-empty centering is applied, the
+    geometry is flung far off-origin). We pre-rotate Z-up -> Y-up here,
+    file = (x, z, -y), so Blender's import rotation cancels it and the geometry
+    lands back at true Z-up. This is a proper rotation (determinant +1, so face
+    winding/normals are preserved) and is exactly what Blender itself does when
+    it *exports* Alembic -- the resulting .abc is a standard Y-up file that any
+    tool reads correctly.
+    """
+    x = points_xyz[:, 0]
+    y = points_xyz[:, 1]
+    z = points_xyz[:, 2]
+    return np.column_stack([x, z, -y]).astype(points_xyz.dtype, copy=False)
+
+
 def write_mesh_sequence_alembic(
     output_path: PathLike,
     frames: List[MeshFrame],
@@ -531,7 +552,10 @@ def write_mesh_sequence_alembic(
         )
 
     for frame in frames:
-        imath_points = _numpy_points_to_v3f(imath, frame.points_xyz)
+        # Write Y-up so Blender's Alembic import rotation lands it at true Z-up.
+        imath_points = _numpy_points_to_v3f(
+            imath, _zup_to_yup(frame.points_xyz)
+        )
 
         # Flatten triangle indices and build the per-face vertex-count stream
         # (all 3, since we triangulated).
