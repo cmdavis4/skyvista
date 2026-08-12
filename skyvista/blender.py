@@ -42,9 +42,10 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -52,6 +53,7 @@ from carlee_tools import PathLike
 
 if TYPE_CHECKING:
     import pyvista as pv
+    from matplotlib.colors import Colormap
 
     from .scene import Scene
     from .varspec import VarSpec
@@ -272,9 +274,67 @@ class BlenderExportConfig:
 # =============================================================================
 # Colormap baking (scalar field -> per-vertex RGB)
 # =============================================================================
+def _safe_colormap_name(name: Optional[str]) -> str:
+    """
+    Return a filename- and registry-safe colormap name not already in use.
+
+    Custom colormap names can contain spaces or punctuation (the matplotlib
+    default is even literally "custom colormap"), which make poor asset
+    filenames and registry keys. Reduce to ``[0-9A-Za-z_-]`` and, if that
+    collides with an already-registered colormap, append a numeric suffix so we
+    never clobber a different colormap.
+    """
+    import matplotlib
+
+    base = str(name) if name else "skyvista_cmap"
+    safe = re.sub(r"[^0-9A-Za-z_-]+", "_", base).strip("_") or "skyvista_cmap"
+    candidate = safe
+    suffix = 1
+    while candidate in matplotlib.colormaps:
+        candidate = f"{safe}_{suffix}"
+        suffix += 1
+    return candidate
+
+
+def resolve_colormap(cmap: Union[str, "Colormap"]) -> Tuple["Colormap", str]:
+    """
+    Normalize a ``cmap`` argument to a ``(Colormap, name)`` pair.
+
+    ``cmap`` may be a matplotlib colormap *name* or an actual ``Colormap``
+    object. A Colormap object is not JSON-serializable, so it cannot go into the
+    manifest directly; and the steps that rebuild the colormap on the Blender
+    side (the colorbar PNG and the volume color-ramp LUT) look it up by *name*.
+    We therefore return both:
+
+    - the ``Colormap`` object, used to bake per-vertex colors here; and
+    - a name string that is JSON-safe and always resolvable via
+      ``matplotlib.colormaps[name]``.
+
+    A custom, unregistered Colormap is registered under a safe unique name so
+    that by-name lookups downstream find exactly this colormap.
+    """
+    import matplotlib
+
+    # A plain name: look up the object, pass the name straight through.
+    if isinstance(cmap, str):
+        return matplotlib.colormaps[cmap], cmap
+
+    # A Colormap-like object whose name already round-trips through the registry
+    # (e.g. "viridis", or a reversed "viridis_r"): use that name as-is.
+    name = getattr(cmap, "name", None)
+    if name and name in matplotlib.colormaps:
+        return cmap, name
+
+    # Unregistered/custom colormap: register it under a safe name so the colorbar
+    # and LUT steps -- which resolve by name -- find exactly this colormap.
+    safe_name = _safe_colormap_name(name)
+    matplotlib.colormaps.register(cmap, name=safe_name)
+    return cmap, safe_name
+
+
 def bake_scalar_to_rgb(
     scalar_values: np.ndarray,
-    colormap: str,
+    colormap: Union[str, "Colormap"],
     color_limits: Tuple[float, float],
 ) -> np.ndarray:
     """
@@ -287,7 +347,7 @@ def bake_scalar_to_rgb(
 
     Args:
         scalar_values: (n_points,) scalar field to color by.
-        colormap_name: Any matplotlib colormap name (e.g. "viridis").
+        colormap: A matplotlib colormap name (e.g. "viridis") or Colormap object.
         color_limits: (vmin, vmax) mapped to the colormap ends. Held fixed
             across all frames so animated colors stay consistent.
 
@@ -766,10 +826,14 @@ def _build_mesh_entry(
     )
 
     color_limits: Optional[Tuple[float, float]] = None
-    colormap = None
+    colormap_name: Optional[str] = None
     if uses_scalar_coloring:
         color_limits = appearance.clim or (global_scalar_min, global_scalar_max)
-        colormap = appearance.cmap or DEFAULT_COLORMAP_NAME
+        # cmap may be a name or an actual Colormap object; resolve to both the
+        # object (for baking) and a JSON-safe name (for the manifest/colorbar).
+        colormap, colormap_name = resolve_colormap(
+            appearance.cmap or DEFAULT_COLORMAP_NAME
+        )
         # ---- Pass 2: bake per-vertex colors with the fixed global range
         for frame in frames:
             if frame.scalar_values is not None and len(frame.scalar_values) > 0:
@@ -802,7 +866,7 @@ def _build_mesh_entry(
         material["coloring"] = {
             "mode": "vertex_color",
             "attribute": VERTEX_COLOR_ATTRIBUTE_NAME,
-            "cmap": colormap,
+            "cmap": colormap_name,
             "clim": list(color_limits),
             "label": colorbar_label,
         }
@@ -1041,7 +1105,9 @@ def _build_volume_entry(
     color_limits = appearance.clim or (
         (global_min, global_max) if np.isfinite(global_min) else (0.0, 1.0)
     )
-    colormap_name = appearance.cmap or DEFAULT_COLORMAP_NAME
+    # cmap may be a name or an actual Colormap object; resolve to a JSON-safe
+    # name that also always resolves via matplotlib.colormaps[...] downstream.
+    _, colormap_name = resolve_colormap(appearance.cmap or DEFAULT_COLORMAP_NAME)
     # Ship the colormap stops so the build script can rebuild the ramp without
     # matplotlib (Blender's Python lacks it).
     colormap_lut_path = write_colormap_lut(data_subdir.parent, colormap_name)
