@@ -554,7 +554,11 @@ class Scene:
         if self.title:
             plotter.add_text(self.title, position="upper_edge", name="title")
 
-        plotter.show(auto_close=False)
+        # No plotter.show() call here on purpose: PyVista's screenshot()
+        # already renders the pipeline itself on first call, and show()
+        # would additionally trigger Jupyter's live display widget (it
+        # checks notebook detection, not the off_screen flag), popping open
+        # an interactive view we don't want for a headless screenshot.
         plotter.screenshot(str(path), scale=scale)
         plotter.close()
         return self
@@ -591,15 +595,21 @@ class Scene:
         # Order matters: render meshes and add bounds BEFORE show_grid(), so
         # CubeAxes initializes against real data extents instead of the
         # default unit cube (which leaves data outside the view frustum).
-        # PyVista also needs the render pipeline initialized (via show) with
-        # the actors already added BEFORE open_gif, otherwise written frames
-        # capture overlays but not the 3D actors.
+        # PyVista also needs the render pipeline initialized, with the
+        # actors already added, BEFORE open_gif, otherwise written frames
+        # capture overlays but not the 3D actors. We use plotter.render()
+        # rather than plotter.show() for that initialization: show() also
+        # runs PyVista's Jupyter-display path (gated on notebook detection,
+        # not on off_screen), which pops open a live interactive widget that
+        # then tracks the plotter through the whole frame loop and is left
+        # sitting on screen showing the last frame once we're done. render()
+        # does the same pipeline setup with no such display side effect.
         self._render_frame(plotter, times[0])
         self._add_bounds_to_plotter(plotter)
         self._add_timestamp(plotter, times[0])
         if self.show_grid:
             plotter.show_grid()
-        plotter.show(auto_close=False)
+        plotter.render()
         plotter.open_gif(str(path), fps=fps)
 
         for t in tqdm(times, desc="Rendering frames"):
