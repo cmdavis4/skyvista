@@ -102,9 +102,11 @@ class BlenderTransform:
             atmospheric domains at a sane magnitude for Blender's single-
             precision math and default clip planes.
         origin_shift: Point in data units mapped to the Blender origin. When
-            None, defaults to the center of the merged data bounds so the
-            figure sits centered on the world origin (nice for orbiting and
-            camera framing). Pass (0, 0, 0) to keep absolute data positions.
+            None, defaults to the horizontal center of the merged data bounds
+            for x/y (so the figure sits centered on the world origin, nice for
+            orbiting and camera framing) but the data's *floor* (z_min) for z,
+            so the figure rests on the ground plane (Blender z=0) instead of
+            straddling it. Pass (0, 0, 0) to keep absolute data positions.
         z_exaggeration: Extra multiplier applied to the vertical axis only.
             1.0 = physically faithful; >1 exaggerates relief. Always recorded.
     """
@@ -1333,12 +1335,24 @@ def export_scene_to_blender(
         )
         object_entries.append(object_entry)
 
-    # ---- Resolve the transform's origin_shift (default: center of data bounds)
+    # ---- Resolve the transform's origin_shift (default: center x/y, floor z)
+    # We center the *horizontal* axes on the data's midpoint (nice for orbiting
+    # and camera framing) but anchor the *vertical* axis to the data's floor
+    # (z_min), NOT its center. Subtracting the z-center would put the middle of
+    # the domain at Blender z=0, dropping the entire lower half of the data below
+    # the ground plane (trajectories/isosurfaces below z=0). For atmospheric data
+    # z=0 is the surface, so the figure should rest *on* the ground: mapping the
+    # data floor to Blender z=0 guarantees nothing sinks underground regardless
+    # of where the vertical coordinate starts (0 m, 500 m, ...).
     transform = config.transform
     if transform.origin_shift is None and running_bounds is not None:
-        center = (running_bounds[0] + running_bounds[1]) / 2.0
-        resolved_origin_shift: Optional[Tuple[float, float, float]] = tuple(
-            float(c) for c in center
+        bounds_min = running_bounds[0]
+        bounds_max = running_bounds[1]
+        horizontal_center = (bounds_min + bounds_max) / 2.0
+        resolved_origin_shift: Optional[Tuple[float, float, float]] = (
+            float(horizontal_center[0]),  # x -> centered
+            float(horizontal_center[1]),  # y -> centered
+            float(bounds_min[2]),         # z -> floored at data z_min
         )
     else:
         resolved_origin_shift = transform.origin_shift

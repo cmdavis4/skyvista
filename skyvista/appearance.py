@@ -6,7 +6,7 @@ colormaps, etc. They are renderer-agnostic and can be converted to
 PyVista kwargs.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -25,6 +25,11 @@ class Appearance:
         clim: Color limits as (min, max) tuple
         show_scalar_bar: Whether to show a scalar bar
         scalar_bar_title: Title for the scalar bar
+        shader: Named surface-material preset for the Blender export backend
+            (e.g. "matte", "glossy", "metal", "glow", "emissive"). ``None`` uses
+            the default matte look. See :mod:`skyvista.shaders` for the full set;
+            "glow" is the emissive, bloom-haloed NCAR "fountain" look. Ignored by
+            the PyVista renderer, which has no equivalent node-based shading.
     """
 
     color: Optional[str] = None
@@ -33,6 +38,7 @@ class Appearance:
     clim: Optional[Tuple[float, float]] = None
     show_scalar_bar: bool = True
     scalar_bar_title: Optional[str] = None
+    shader: Optional[str] = None
 
     def to_pyvista_kwargs(self) -> Dict[str, Any]:
         """Convert appearance to PyVista add_mesh kwargs."""
@@ -64,18 +70,17 @@ class Appearance:
         opacity, and a solid color if one is set). The coloring *mode*
         (baked vertex colors vs. solid) is decided by the exporter, which has
         the extra context of whether a scalar field is present.
+
+        The ``shader`` block is resolved from the named preset in ``self.shader``
+        (default: a clean matte surface); a Blender user can still override any
+        of it on the imported material.
         """
+        from .shaders import resolve_shader
+
         material: Dict[str, Any] = {
             "type": "surface",
             "opacity": self.opacity,
-            # A physically-based default that reads as a clean, matte surface;
-            # a Blender user can override any of this on the imported material.
-            "shader": {
-                "base": "principled",
-                "roughness": 0.4,
-                "metallic": 0.0,
-                "emission_strength": 0.0,
-            },
+            "shader": resolve_shader(self.shader),
         }
         return material
 

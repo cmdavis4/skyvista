@@ -72,8 +72,9 @@ experts using best practices.")
 `blender = (data − origin_shift) · scale` (with an extra vertical factor) is
 applied to **everything** via a parent **Empty** (`skyvista_root`); geometry
 stays in physical units so it's inspectable/reversible. Defaults: **scale =
-1/1000**, `origin_shift` auto-centers on the merged data bounds, `z_exaggeration
-= 1.0`.
+1/1000**, `origin_shift` auto-centers x/y on the merged data bounds but floors z
+at the data's z_min (so the figure rests on the ground plane rather than
+straddling it), `z_exaggeration = 1.0`.
 
 **Color management:** render view transform defaults to **Standard** (not
 AgX/Filmic) so a scientific figure's colors aren't silently altered.
@@ -168,7 +169,7 @@ editable-scalar storage-type verdict.
 ```jsonc
 {
   "skyvista_manifest_version": "0.1",
-  "transform": { "origin_shift": [cx,cy,cz], "scale": 0.001, "z_exaggeration": 1.0 },
+  "transform": { "origin_shift": [cx,cy,zmin], "scale": 0.001, "z_exaggeration": 1.0 },
   "time": { "fps": 24, "frame_start": 1, "frame_end": N, "data_times": [...] },
   "render": { "engine": "CYCLES", "samples": 128, "resolution": [1920,1080],
               "view_transform": "Standard", "film_transparent": true },

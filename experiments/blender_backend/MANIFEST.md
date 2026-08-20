@@ -127,8 +127,15 @@ storm_figure/
           // "colormap_lut": "assets/colormaps/viridis.png"
         },
         "opacity": 0.7,
-        "shader": { "base": "principled", "roughness": 0.4, "metallic": 0.0,
-                    "emission_strength": 0.0 }
+        // shader = a resolved *preset* (skyvista.shaders.SHADER_PRESETS:
+        //   matte | glossy | metal | glow | emissive). "glow" is the NCAR
+        //   emissive-fountain look: emission_from "color" drives Emission Color
+        //   from the same source as Base Color (the vertex colormap or solid
+        //   color), and bloom=true requests a scene-wide Glare/bloom pass.
+        "shader": { "preset": "matte", "base": "principled",
+                    "roughness": 0.4, "metallic": 0.0,
+                    "emission_strength": 0.0, "emission_from": null,
+                    "bloom": false }
       }
     },
 

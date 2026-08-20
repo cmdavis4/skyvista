@@ -196,11 +196,35 @@ def parse_color(color_spec):
 # ---------------------------------------------------------------------------
 # Materials
 # ---------------------------------------------------------------------------
+def _principled_emission_color_input(principled):
+    """
+    Return the Principled BSDF's emission *color* input across Blender versions.
+
+    The socket was renamed over time: 3.x/early-4.x expose "Emission"; 4.x+
+    renamed it to "Emission Color" (adding a separate "Emission Strength"). Try
+    the current name first, fall back to the old one, and return None if neither
+    exists so callers can skip emission gracefully.
+    """
+    for socket_name in ("Emission Color", "Emission"):
+        if socket_name in principled.inputs:
+            return principled.inputs[socket_name]
+    return None
+
+
 def make_surface_material(name, material_spec):
-    """Build a Principled-BSDF surface material from a manifest material block."""
+    """
+    Build a Principled-BSDF surface material from a manifest material block.
+
+    The color source (a baked per-vertex color attribute, or a solid color) is
+    computed once and then wired into Base Color; if the shader preset is
+    emissive (``shader.emission_from == "color"``), the same source also drives
+    the Emission Color so the surface self-illuminates in its own data color --
+    the basis of the "glow" look, which a scene-wide bloom pass then haloes.
+    """
     material = bpy.data.materials.new(name=f"{name}_mat")
     material.use_nodes = True
     node_tree = material.node_tree
+    links = node_tree.links
     principled = node_tree.nodes.get("Principled BSDF")
 
     shader = material_spec.get("shader", {})
@@ -214,24 +238,49 @@ def make_surface_material(name, material_spec):
                 shader.get("metallic", 0.0)
             )
 
+    # ---- Resolve the single color source (a shader output socket, or a value).
+    # For vertex-colored objects it's an Attribute node's Color output; for
+    # solid-colored ones it's a constant RGBA. We keep the socket (if any) so it
+    # can feed both Base Color and, when emissive, Emission Color.
     coloring = material_spec.get("coloring", {})
+    color_output_socket = None
+    solid_color_value = None
     if coloring.get("mode") == "vertex_color":
-        # Read the baked per-vertex color attribute into Base Color.
-        attribute_node = node_tree.nodes.new("ShaderNodeAttribute")
-        # The manifest names the baked color attribute (default "col_data" --
-        # NOT "color", which collides with a reserved attribute in Cycles and
+        # Read the baked per-vertex color attribute (default "col_data" -- NOT
+        # "color", which collides with a reserved attribute in Cycles and
         # renders grey there while EEVEE looks fine).
+        attribute_node = node_tree.nodes.new("ShaderNodeAttribute")
         attribute_node.attribute_name = coloring.get("attribute", "col_data")
         attribute_node.location = (-350, 0)
-        if principled is not None:
-            node_tree.links.new(
-                attribute_node.outputs["Color"], principled.inputs["Base Color"]
-            )
+        color_output_socket = attribute_node.outputs["Color"]
     else:
-        if principled is not None:
-            principled.inputs["Base Color"].default_value = parse_color(
-                coloring.get("color", "#cccccc")
-            )
+        solid_color_value = parse_color(coloring.get("color", "#cccccc"))
+
+    # ---- Base Color from the resolved source.
+    if principled is not None:
+        if color_output_socket is not None:
+            links.new(color_output_socket, principled.inputs["Base Color"])
+        else:
+            principled.inputs["Base Color"].default_value = solid_color_value
+
+    # ---- Emission: for an emissive preset, drive Emission Color from the same
+    # color source and set Emission Strength so the surface self-illuminates.
+    emission_strength = float(shader.get("emission_strength", 0.0))
+    emission_from = shader.get("emission_from")
+    if (
+        principled is not None
+        and emission_from == "color"
+        and emission_strength > 0.0
+    ):
+        emission_color_input = _principled_emission_color_input(principled)
+        if emission_color_input is not None:
+            if color_output_socket is not None:
+                links.new(color_output_socket, emission_color_input)
+            else:
+                emission_color_input.default_value = solid_color_value
+        strength_input = principled.inputs.get("Emission Strength")
+        if strength_input is not None:
+            strength_input.default_value = emission_strength
 
     # Opacity via alpha; enable alpha blending for EEVEE (Cycles honors it too).
     opacity = float(material_spec.get("opacity", 1.0))
@@ -616,16 +665,123 @@ def setup_world(scene, manifest):
 # ---------------------------------------------------------------------------
 # Colorbar compositing (best-effort overlay of the baked colorbar PNGs)
 # ---------------------------------------------------------------------------
-def setup_colorbar_compositing(scene, manifest, bundle_dir):
+def _set_compositor_value(node, property_name, socket_label, value):
     """
-    Overlay the baked colorbar PNGs onto the render via the compositor.
+    Set a compositor-node setting that may be a property or an input socket.
+
+    Blender 5.0 moved several Glare settings from node properties to input
+    sockets, and the two use different keys (property ``threshold`` vs socket
+    "Threshold"). Try the property, then the socket, and silently skip if
+    neither exists so a renamed setting can't abort the build.
+    """
+    if hasattr(node, property_name):
+        try:
+            setattr(node, property_name, value)
+            return
+        except (TypeError, AttributeError):
+            pass
+    socket = node.inputs.get(socket_label)
+    if socket is not None:
+        try:
+            socket.default_value = value
+        except (TypeError, AttributeError):
+            pass
+
+
+def _select_glare_bloom_type(glare):
+    """
+    Set a Glare node to a bloom-style type across Blender versions.
+
+    The control moved between releases: <= 4.x exposes a ``glare_type`` enum
+    *property* with UPPERCASE identifiers ("BLOOM" was added in 4.4; "FOG_GLOW"
+    is the older soft-halo fallback that reads the same); 5.0 replaced it with a
+    "Type" menu *input socket* whose values are title-case labels ("Bloom",
+    "Fog Glow"). The default is "Streaks" (a star/streak look), so we must set
+    this explicitly or we get streaks instead of a halo. Try both mechanisms.
+    """
+    if hasattr(glare, "glare_type"):
+        try:
+            available = {
+                item.identifier
+                for item in glare.bl_rna.properties["glare_type"].enum_items
+            }
+        except (KeyError, AttributeError):
+            available = set()
+        for candidate in ("BLOOM", "FOG_GLOW"):
+            if candidate in available:
+                glare.glare_type = candidate
+                return
+    type_socket = glare.inputs.get("Type")
+    if type_socket is not None:
+        for candidate in ("Bloom", "Fog Glow"):
+            try:
+                type_socket.default_value = candidate
+                return
+            except (TypeError, ValueError):
+                pass
+
+
+def _set_glare_size(glare):
+    """
+    Set a soft, large bloom radius, handling the int- vs float-size split.
+
+    <= 4.x: an integer ``size`` property (1..9, a power-of-two kernel size).
+    5.0: a float "Size" input socket (0..1, relative to the image). Set whichever
+    this Blender has, with a magnitude appropriate to that scale.
+    """
+    if hasattr(glare, "size"):
+        try:
+            glare.size = 7
+            return
+        except (TypeError, AttributeError):
+            pass
+    size_socket = glare.inputs.get("Size")
+    if size_socket is not None:
+        try:
+            size_socket.default_value = 0.6
+        except (TypeError, ValueError):
+            pass
+
+
+def add_bloom_glare(node_tree, input_socket):
+    """
+    Insert a Glare (bloom) node after ``input_socket`` and return its output.
+
+    Bloom is what turns bright emissive surfaces (the "glow" shader preset) into
+    soft haloed light -- the NCAR "fountain" look. Cycles has no built-in bloom,
+    so it is done here in the compositor as a full-frame post-process; a single
+    glowing object is enough to warrant it, and it composes with the colorbar
+    overlay by feeding this node's output on into that chain.
+
+    The Glare node's type and settings vary across Blender versions (5.0 turned
+    them into input sockets and made "Type" a menu), so select the type and set
+    values defensively via the version-aware helpers above.
+    """
+    glare = node_tree.nodes.new("CompositorNodeGlare")
+    _select_glare_bloom_type(glare)
+    # Only pixels above the threshold bloom; ~1.0 means just the HDR
+    # (emission_strength > 1) emitters halo, not the whole lit scene.
+    _set_compositor_value(glare, "threshold", "Threshold", 1.0)
+    _set_glare_size(glare)
+
+    node_tree.links.new(input_socket, glare.inputs["Image"])
+    return glare.outputs["Image"]
+
+
+def setup_compositing(scene, manifest, bundle_dir, add_bloom=False):
+    """
+    Build the compositor chain: render layers -> [bloom] -> [colorbars] -> out.
+
+    Overlays the baked colorbar PNGs onto the render and, when ``add_bloom`` is
+    set (any object uses a bloom shader preset), inserts a Glare/bloom pass
+    first so emissive surfaces halo.
 
     Best-effort: compositor socket names vary across Blender versions, so the
     whole thing is wrapped by the caller; if it fails the render still works and
     the colorbar PNGs remain in the bundle for manual compositing.
     """
     colorbars = manifest.get("annotations", {}).get("colorbars", [])
-    if not colorbars:
+    if not colorbars and not add_bloom:
         return
 
     # Resolve the compositor node tree across Blender versions. 5.0 removed
@@ -671,6 +827,11 @@ def setup_colorbar_compositing(scene, manifest, bundle_dir):
     resolution_x = scene.render.resolution_x
     resolution_y = scene.render.resolution_y
     current_image_socket = render_layers.outputs["Image"]
+
+    # Bloom first (if requested), so the colorbar overlay sits crisply on top of
+    # the haloed render rather than being bloomed itself.
+    if add_bloom:
+        current_image_socket = add_bloom_glare(node_tree, current_image_socket)
 
     for colorbar_index, colorbar in enumerate(colorbars):
         image = bpy.data.images.load(
@@ -764,11 +925,19 @@ def main():
     setup_camera(scene, manifest, transform, built_objects)
     setup_world(scene, manifest)
 
-    # Colorbar compositing is best-effort: never let it abort the build.
+    # A bloom pass is warranted if any surface object opted into it via its
+    # shader preset (the "glow" look). Bloom is a full-frame effect, so one
+    # emitter turns it on for the whole render.
+    needs_bloom = any(
+        object_spec.get("material", {}).get("shader", {}).get("bloom")
+        for object_spec in manifest.get("objects", [])
+    )
+
+    # Compositing (bloom + colorbars) is best-effort: never let it abort build.
     try:
-        setup_colorbar_compositing(scene, manifest, bundle_dir)
+        setup_compositing(scene, manifest, bundle_dir, add_bloom=needs_bloom)
     except Exception as compositing_error:
-        print(f"  [WARN] colorbar compositing skipped: "
+        print(f"  [WARN] compositing skipped: "
               f"{type(compositing_error).__name__}: {compositing_error}")
 
     blend_path = bundle_dir / f"{bundle_dir.name}.blend"

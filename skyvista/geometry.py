@@ -114,3 +114,4 @@ class TrajectoryGeometry(Geometry):
     head_radius_frac: float = 2.5
     tube_resolution: int = 4
     head_radial_resolution: int = 30
+    max_points: Optional[int] = None

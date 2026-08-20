@@ -67,6 +67,7 @@ def make_contour(
     show_scalar_bar: bool = False,
     scalar_bar_title: Optional[str] = None,
     style: str = "surface",
+    shader: Optional[str] = None,
     # VarSpec base
     name: Optional[str] = None,
     empty_ok: bool = False,
@@ -87,6 +88,9 @@ def make_contour(
         show_scalar_bar: Show scalar bar
         scalar_bar_title: Title for scalar bar
         style: "surface", "wireframe", or "points"
+        shader: Blender shader preset (e.g. "matte", "glossy", "metal", "glow",
+            "emissive"); None uses the default matte surface. Only affects the
+            Blender export backend.
         name: Unique identifier
         empty_ok: Don't skip when mesh is empty
         **kwargs: Additional kwargs (pyvista_create_kwargs, pyvista_add_kwargs)
@@ -111,6 +115,7 @@ def make_contour(
         show_scalar_bar=show_scalar_bar,
         scalar_bar_title=scalar_bar_title or varname,
         style=style,
+        shader=shader,
     )
     return ContourSpec(
         geometry=geometry,
@@ -334,12 +339,14 @@ def make_trajectory(
     head_radius_frac: float = 2.5,
     tube_resolution: int = 4,
     head_radial_resolution: int = 30,
+    max_points: Optional[int] = None,
     # Appearance
     opacity: float = 1.0,
     clim: Optional[Tuple[float, float]] = None,
     show_scalar_bar: bool = False,
     scalar_bar_title: Optional[str] = None,
     silhouettes: bool = False,
+    shader: Optional[str] = None,
     # VarSpec base
     name: Optional[str] = None,
     empty_ok: bool = False,
@@ -364,6 +371,9 @@ def make_trajectory(
         show_scalar_bar: Show scalar bar
         scalar_bar_title: Title for scalar bar
         silhouettes: Add silhouette effect
+        shader: Blender shader preset (e.g. "glow" for the emissive, bloom-
+            haloed NCAR "fountain" look); None uses the default matte surface.
+            Only affects the Blender export backend.
         name: Unique identifier
         empty_ok: Don't skip when mesh is empty
         **kwargs: Additional kwargs
@@ -373,6 +383,7 @@ def make_trajectory(
 
     Example:
         >>> spec = make_trajectory(scalar="altitude", cmap="viridis")
+        >>> glowing = make_trajectory(scalar="w", cmap="Blues", shader="glow")
     """
     geometry = TrajectoryGeometry(
         scalar=scalar,
@@ -381,6 +392,7 @@ def make_trajectory(
         head_radius_frac=head_radius_frac,
         tube_resolution=tube_resolution,
         head_radial_resolution=head_radial_resolution,
+        max_points=max_points,
     )
     appearance = TrajectoryAppearance(
         color=color,
@@ -391,6 +403,7 @@ def make_trajectory(
         scalar_bar_title=scalar_bar_title or scalar,
         style=style,
         silhouettes=silhouettes,
+        shader=shader,
     )
     return TrajectorySpec(
         geometry=geometry,

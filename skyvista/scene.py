@@ -62,7 +62,9 @@ class Scene:
     _specs: List[Tuple[xr.Dataset, VarSpec]] = field(default_factory=list)
 
     # Cached bounds meshes keyed by dataset id
-    _bounds_meshes: Dict[int, pv.PolyData] = field(default_factory=dict, repr=False)
+    _bounds_meshes: Dict[int, pv.PolyData] = field(
+        default_factory=dict, repr=False
+    )
 
     # Cached plotter for interactive use
     _plotter: Optional[pv.Plotter] = field(default=None, repr=False)
@@ -133,6 +135,7 @@ class Scene:
         clim: Optional[Tuple[float, float]] = None,
         show_scalar_bar: bool = False,
         style: str = "surface",
+        shader: Optional[str] = None,
         **kwargs,
     ) -> "Scene":
         """
@@ -150,6 +153,9 @@ class Scene:
             clim: Color limits
             show_scalar_bar: Show scalar bar
             style: "surface", "wireframe", or "points"
+            shader: Blender shader preset (e.g. "matte", "glossy", "metal",
+                "glow", "emissive"); None uses the default matte surface. Only
+                affects the Blender export backend.
             **kwargs: Additional VarSpec kwargs
 
         Returns:
@@ -168,6 +174,7 @@ class Scene:
             clim=clim,
             show_scalar_bar=show_scalar_bar,
             style=style,
+            shader=shader,
             **kwargs,
         )
         return self.add(ds, spec)
@@ -198,7 +205,8 @@ class Scene:
                 self.add_contour(ds, varname, **spec)
             else:
                 raise ValueError(
-                    f"Contour spec for {varname} must be list or dict, got {type(spec)}"
+                    f"Contour spec for {varname} must be list or dict, got"
+                    f" {type(spec)}"
                 )
         return self
 
@@ -354,8 +362,10 @@ class Scene:
         tube_radius: float = 70,
         head_length_frac: float = 10,
         opacity: float = 1.0,
+        max_points: Optional[int] = None,
         show_scalar_bar: bool = False,
         silhouettes: bool = False,
+        shader: Optional[str] = None,
         **kwargs,
     ) -> "Scene":
         """
@@ -373,6 +383,9 @@ class Scene:
             opacity: Opacity (0-1)
             show_scalar_bar: Show scalar bar
             silhouettes: Add silhouette effect
+            shader: Blender shader preset (e.g. "glow" for the emissive,
+                bloom-haloed NCAR "fountain" look); None uses the default matte
+                surface. Only affects the Blender export backend.
             **kwargs: Additional VarSpec kwargs
 
         Returns:
@@ -389,8 +402,10 @@ class Scene:
             tube_radius=tube_radius,
             head_length_frac=head_length_frac,
             opacity=opacity,
+            max_points=max_points,
             show_scalar_bar=show_scalar_bar,
             silhouettes=silhouettes,
+            shader=shader,
             **kwargs,
         )
         return self.add(ds, spec)
