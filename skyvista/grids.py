@@ -171,7 +171,13 @@ COORD_ALIASES: Dict[str, List[str]] = {
 CF_STANDARD_NAMES: Dict[str, List[str]] = {
     "x": ["projection_x_coordinate", "grid_longitude", "longitude"],
     "y": ["projection_y_coordinate", "grid_latitude", "latitude"],
-    "z": ["altitude", "height", "depth", "air_pressure", "atmosphere_sigma_coordinate"],
+    "z": [
+        "altitude",
+        "height",
+        "depth",
+        "air_pressure",
+        "atmosphere_sigma_coordinate",
+    ],
     "time": ["time"],
 }
 
@@ -352,19 +358,9 @@ def resolve_coordinate(ds: xr.Dataset, axis: str) -> str:
         example_names += ", ..."
 
     raise ValueError(
-        f"Could not find a coordinate for the {axis}-axis in the dataset.\n"
-        f"  Skyvista needs to identify which coordinate corresponds to the "
-        f"{axis}-axis. It tried:\n"
-        f"    1. CF conventions: looked for axis='{CF_AXIS_NAMES.get(axis, '?')}' "
-        f"attribute or standard_name in {CF_STANDARD_NAMES.get(axis, [])}\n"
-        f"    2. Common name patterns: {example_names}\n"
-        f"  None of these matched the dataset's coordinates/dimensions: "
-        f"{available}\n"
-        f"  To fix, either:\n"
-        f"    - Rename a coordinate to a recognized name "
-        f"(e.g. {aliases[0]!r} for the {axis}-axis)\n"
-        f"    - Add a CF-compliant axis attribute: "
-        f'ds["my_coord"].attrs["axis"] = "{CF_AXIS_NAMES.get(axis, "?")}"'
+        f"Could not find a coordinate for the {axis}-axis in the dataset; see"
+        " https://github.com/cmdavis4/skyvista/blob/main/docs/API_guide.ipynb"
+        " for more details."
     )
 
 
@@ -664,8 +660,8 @@ class GridBuilder(ABC):
                     f"{self.grid_type} grid.\n"
                     f"  Variable dimensions: {data.dims}\n"
                     f"  Expected dimensions: {expected_dims}\n"
-                    f"  No dimensions overlap. The variable may belong to a "
-                    f"different grid or coordinate system."
+                    "  No dimensions overlap. The variable may belong to a "
+                    "different grid or coordinate system."
                 )
 
             extra_dims = set(data.dims) - set(dims_to_use)
@@ -674,7 +670,7 @@ class GridBuilder(ABC):
                     f"Variable '{varname}' has extra dimensions "
                     f"{sorted(extra_dims)} beyond what the {self.grid_type} "
                     f"grid expects {tuple(dims_to_use)}.\n"
-                    f"  Select a specific index first, e.g.: "
+                    "  Select a specific index first, e.g.: "
                     f"ds.isel({next(iter(extra_dims))}=0)"
                 )
 
@@ -687,8 +683,8 @@ class GridBuilder(ABC):
                 f"Shape mismatch: variable '{varname}' has {n_values} values "
                 f"but the mesh has {n_points} points.\n"
                 f"  Variable shape (after transpose): {data.shape}\n"
-                f"  This usually means the variable has extra dimensions "
-                f"(e.g. 'time') that need to be selected first."
+                "  This usually means the variable has extra dimensions "
+                "(e.g. 'time') that need to be selected first."
             )
 
         mesh[varname] = data.values.ravel(order="F")
@@ -1319,8 +1315,12 @@ class SphericalGridBuilder(GridBuilder):
                 range_3d = np.broadcast_to(
                     range_vals[:, np.newaxis, np.newaxis], out_shape
                 )
-                azimuth_3d = np.broadcast_to(azimuth[np.newaxis, :, :], out_shape)
-                elevation_3d = np.broadcast_to(elevation[np.newaxis, :, :], out_shape)
+                azimuth_3d = np.broadcast_to(
+                    azimuth[np.newaxis, :, :], out_shape
+                )
+                elevation_3d = np.broadcast_to(
+                    elevation[np.newaxis, :, :], out_shape
+                )
 
                 range_vals = range_3d
                 azimuth = azimuth_3d
@@ -1402,7 +1402,9 @@ class SphericalGridBuilder(GridBuilder):
                     found[axis] = name
                 else:
                     aliases = SPHERICAL_COORD_NAMES[axis][:4]
-                    missing.append(f"{axis} (looked for: {', '.join(aliases)}, ...)")
+                    missing.append(
+                        f"{axis} (looked for: {', '.join(aliases)}, ...)"
+                    )
             available = sorted(set(ds.coords.keys()) | set(ds.sizes.keys()))
             raise ValueError(
                 "Could not resolve spherical coordinates from this dataset.\n"
@@ -1509,17 +1511,15 @@ def detect_grid_type(ds: xr.Dataset) -> GridBuilder:
         available = sorted(set(ds.coords.keys()) | set(ds.sizes.keys()))
         raise ValueError(
             "Could not auto-detect grid type from the dataset's coordinates.\n"
-            f"  Available coordinates/dimensions: {available}\n"
-            "  Skyvista recognizes these coordinate systems:\n"
-            "    - Cartesian: coordinates named x/y/z (or similar, e.g. "
-            "XLONG/XLAT/height)\n"
-            "    - Geographic: coordinates named lon/lat/altitude (or similar)\n"
-            "    - Spherical/radar: coordinates named range/azimuth/elevation\n"
-            "  To fix, either rename your coordinates to match one of these\n"
-            "  patterns, add CF-compliant 'axis' attributes, or pass an "
-            "explicit\n"
-            "  grid_type to get_grid_builder().\n"
-            f"  (Underlying error: {e})"
+            f"  Available coordinates/dimensions: {available}\n  Skyvista"
+            " recognizes these coordinate systems:\n    - Cartesian:"
+            " coordinates named x/y/z (or similar, e.g. XLONG/XLAT/height)\n  "
+            "  - Geographic: coordinates named lon/lat/altitude (or similar)\n"
+            "    - Spherical/radar: coordinates named"
+            " range/azimuth/elevation\n  To fix, either rename your"
+            " coordinates to match one of these\n  patterns, add CF-compliant"
+            " 'axis' attributes, or pass an explicit\n  grid_type to"
+            f" get_grid_builder().\n  (Underlying error: {e})"
         ) from e
 
     # Check for geographic grid (lat/lon) - use GeographicGridBuilder
@@ -1607,7 +1607,7 @@ def get_grid_builder(
             available = sorted(set(ds.coords.keys()) | set(ds.sizes.keys()))
             raise ValueError(
                 f"Cannot use grid_type='spherical': missing {missing} "
-                f"coordinate(s).\n"
+                "coordinate(s).\n"
                 f"  Found: {found if found else 'none'}\n"
                 f"  Available coordinates/dimensions: {available}\n"
                 "  Spherical grids require range, azimuth, and elevation "
