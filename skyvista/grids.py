@@ -1510,16 +1510,8 @@ def detect_grid_type(ds: xr.Dataset) -> GridBuilder:
     except ValueError as e:
         available = sorted(set(ds.coords.keys()) | set(ds.sizes.keys()))
         raise ValueError(
-            "Could not auto-detect grid type from the dataset's coordinates.\n"
-            f"  Available coordinates/dimensions: {available}\n  Skyvista"
-            " recognizes these coordinate systems:\n    - Cartesian:"
-            " coordinates named x/y/z (or similar, e.g. XLONG/XLAT/height)\n  "
-            "  - Geographic: coordinates named lon/lat/altitude (or similar)\n"
-            "    - Spherical/radar: coordinates named"
-            " range/azimuth/elevation\n  To fix, either rename your"
-            " coordinates to match one of these\n  patterns, add CF-compliant"
-            " 'axis' attributes, or pass an explicit\n  grid_type to"
-            f" get_grid_builder().\n  (Underlying error: {e})"
+            "Could not auto-detect grid type from the dataset's"
+            " coordinates.\n(Underlying error: {e})"
         ) from e
 
     # Check for geographic grid (lat/lon) - use GeographicGridBuilder
