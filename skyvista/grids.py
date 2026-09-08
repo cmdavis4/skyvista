@@ -350,13 +350,8 @@ def resolve_coordinate(ds: xr.Dataset, axis: str) -> str:
     if coord:
         return coord
 
-    # Build helpful error message
-    aliases = COORD_ALIASES.get(axis, [])
-    available = sorted(set(ds.coords.keys()) | set(ds.sizes.keys()))
-    example_names = ", ".join(f"'{a}'" for a in aliases[:6])
-    if len(aliases) > 6:
-        example_names += ", ..."
-
+    # Point at the API guide rather than enumerating every alias and CF
+    # attribute that was tried; the long form was deliberately dropped.
     raise ValueError(
         f"Could not find a coordinate for the {axis}-axis in the dataset; see"
         " https://github.com/cmdavis4/skyvista/blob/main/docs/API_guide.ipynb"
@@ -1347,7 +1342,12 @@ class SphericalGridBuilder(GridBuilder):
         az_min, az_max = azimuth.min(), azimuth.max()
         el_min, el_max = elevation.min(), elevation.max()
 
-        # Sample points around the bounds to find Cartesian extent
+        # Sample points around the bounds to find Cartesian extent.
+        # The spherical-to-Cartesian map is non-linear, so the Cartesian extremes
+        # do not always sit at the corners of the range/azimuth/elevation box.
+        # Sweeping azimuth and elevation catches the interior extremes: the
+        # horizontal radius r*cos(elevation) peaks wherever elevation is closest
+        # to zero, which is an interior point when the elevation range spans it.
         n_samples = 20
         az_samples = np.linspace(az_min, az_max, n_samples)
         el_samples = np.linspace(el_min, el_max, n_samples)
@@ -1356,7 +1356,7 @@ class SphericalGridBuilder(GridBuilder):
         all_x, all_y, all_z = [], [], []
         for r in [r_min, r_max]:
             for az in az_samples:
-                for el in [el_min, el_max]:
+                for el in el_samples:
                     x, y, z = self._to_cartesian(
                         np.array([r]), np.array([az]), np.array([el])
                     )
@@ -1508,10 +1508,9 @@ def detect_grid_type(ds: xr.Dataset) -> GridBuilder:
     try:
         coords = resolve_coordinates(ds, ["x", "y", "z"])
     except ValueError as e:
-        available = sorted(set(ds.coords.keys()) | set(ds.sizes.keys()))
         raise ValueError(
             "Could not auto-detect grid type from the dataset's"
-            " coordinates.\n(Underlying error: {e})"
+            f" coordinates.\n(Underlying error: {e})"
         ) from e
 
     # Check for geographic grid (lat/lon) - use GeographicGridBuilder

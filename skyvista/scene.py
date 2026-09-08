@@ -729,6 +729,13 @@ class Scene:
         """
         Export to interactive HTML.
 
+        Uses the cached plotter (``self.plotter``), not a fresh one, so it
+        matches ``show()``: any actor added, or camera set, directly on
+        ``scene.plotter`` before this call is baked into the export. A fresh
+        plotter would drop that extra state, since the specs added via
+        ``add_contour()``/etc. are only what ``_render_frame`` knows how to
+        replay.
+
         Args:
             path: Output file path
             time: Specific time to render (default: last time)
@@ -736,12 +743,14 @@ class Scene:
         Returns:
             self (for method chaining)
         """
-        plotter = self._build_plotter()
+        plotter = self.plotter
         self._render_frame(plotter, time or self._get_last_time())
         self._add_bounds_to_plotter(plotter)
 
         if self.show_grid:
             plotter.show_grid()
+        if self.title:
+            plotter.add_text(self.title, position="upper_edge", name="title")
 
         plotter.export_html(str(path))
         return self

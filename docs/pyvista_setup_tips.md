@@ -41,9 +41,19 @@ automatically:
 
 skyvista handles the setup for you: on `import skyvista` it detects a headless
 environment, enables offscreen mode (`PYVISTA_OFF_SCREEN`), and clears a **stale
-`DISPLAY`** — a dead `Xvfb` pointer like `:99.0` left in a shell profile — so VTK
-takes the clean EGL/OSMesa path instead of first failing to reach X and printing
-a confusing "bad X server connection" warning.
+`DISPLAY`** — a dead `Xvfb` pointer like `:99.0` left in a shell profile — so the
+headless detection isn't fooled into thinking a display exists.
+
+You will likely still see one line like this on the first render:
+
+```
+vtkXOpenGLRenderWindow: bad X server connection. DISPLAY=
+```
+
+That warning is harmless and expected. VTK always probes X before falling back,
+so it prints the warning and then renders successfully via EGL/OSMesa. Confirm
+with `python -m skyvista`: if the doctor reports `✔ offscreen render`, the
+warning can be ignored.
 
 - Opt out of the auto-setup with `SKYVISTA_NO_AUTOCONFIG=1` before importing.
 - Override anything explicitly with `skyvista.configure(...)` (see its docstring

@@ -1,6 +1,6 @@
 [workspace]
 name = "skyvista"
-version = "1.1.0"
+version = "1.2.0"
 description = "PyVista-based 3D visualization for atmospheric data"
 channels = ["conda-forge"]
 platforms = ["linux-64", "osx-64", "osx-arm64"]
@@ -93,7 +93,7 @@ clean = "rm -rf build/ dist/ *.egg-info .pytest_cache/ .coverage .mypy_cache/ __
 
 [pypi-dependencies]
 skyvista = { path = ".", editable = true }
-carlee_tools = { path = "../carlee_tools", editable = true }
+carlee_tools = { path = "../carlee-tools", editable = true }
 
 [dependencies]
 python = ">=3.13.0"

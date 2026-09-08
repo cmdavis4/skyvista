@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "skyvista"
-version = "1.1.0"
+version = "1.2.0"
 description = "PyVista-based 3D visualization for atmospheric data"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.13"
 license = {text = "MIT"}
 authors = [
     {name = "Charles Davis", email = "cmdavis4@colostate.edu"}
@@ -29,7 +29,7 @@ dependencies = [
     "numpy",
     "xarray",
     "matplotlib",
-    "carlee-tools>=1.2.0",
+    "carlee-tools>=2.0.0",
     "ipython",
     "tqdm",
     "ipywidgets"

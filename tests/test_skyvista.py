@@ -151,7 +151,10 @@ class TestScene:
         scene = Scene()
         assert scene.background == "#f8f6f1"
         assert scene.show_grid is True
-        assert scene.force_bounds is False
+        # force_bounds defaults to True: the scene adds a nearly transparent
+        # wireframe at each dataset's domain edge, which pins the view extent
+        # so the camera never crops the data.
+        assert scene.force_bounds is True
 
     def test_scene_with_custom_settings(self):
         """Test scene creation with custom settings."""

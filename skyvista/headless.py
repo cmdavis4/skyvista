@@ -11,8 +11,11 @@ This module turns that already-working path into a zero-configuration one:
 
 - :func:`configure` idempotently puts PyVista into offscreen mode when there is
   no usable display, and cleans up a stale ``DISPLAY`` (a dead ``Xvfb`` pointer
-  left in a shell profile) so VTK does not emit a confusing "bad X server"
-  warning before silently falling back to EGL. It also exposes the two
+  left in a shell profile) so the headless detection is not fooled into thinking
+  a display exists. Note that clearing ``DISPLAY`` does *not* silence VTK's "bad
+  X server connection" warning: VTK always probes X before falling back, so the
+  warning still appears (with an empty ``DISPLAY=``) and is harmless -- the
+  render then succeeds via EGL/OSMesa. It also exposes the two
   interactive-notebook knobs (Jupyter backend, ``server_proxy``) so users can
   stop copy-pasting trame boilerplate.
 
@@ -128,8 +131,10 @@ def configure(
             Jupyter served behind a proxy. Leave ``None``/False for VSCode.
         server_proxy_prefix: URL prefix used when ``server_proxy`` is enabled.
         silence_stale_display: When going offscreen, clear a ``DISPLAY`` that
-            points at a non-responding X server so VTK takes the clean EGL/OSMesa
-            path without first emitting a "bad X server connection" warning.
+            points at a non-responding X server, so nothing downstream mistakes
+            the dead pointer for a live display. VTK still probes X and still
+            prints its "bad X server connection" warning before falling back to
+            EGL/OSMesa; clearing only empties the ``DISPLAY=`` in that message.
         verbose: Print what was changed.
 
     Returns:
@@ -154,9 +159,10 @@ def configure(
         # explicit user choice already in the environment.
         os.environ.setdefault("PYVISTA_OFF_SCREEN", "true")
 
-        # Clear a dead DISPLAY pointer so VTK doesn't try (and noisily fail) X
-        # before falling back to EGL/OSMesa. Only do this when the display is
-        # genuinely unreachable, and remember the value so it can be restored.
+        # Drop a dead DISPLAY pointer so later display checks see the truth.
+        # This does not stop VTK's own X probe or its "bad X server" warning.
+        # Only do this when the display is genuinely unreachable, and remember
+        # the value so it can be restored.
         display = os.environ.get("DISPLAY")
         if silence_stale_display and display and not _x_server_reachable(display):
             _cleared_display_value = display
