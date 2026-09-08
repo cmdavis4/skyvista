@@ -118,9 +118,7 @@ class BlenderTransform:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "origin_shift": (
-                list(self.origin_shift)
-                if self.origin_shift is not None
-                else None
+                list(self.origin_shift) if self.origin_shift is not None else None
             ),
             "scale": self.scale,
             "z_exaggeration": self.z_exaggeration,
@@ -359,23 +357,13 @@ def bake_scalar_to_rgb(
     import matplotlib
     from matplotlib.colors import Normalize
 
-    colormap = (
-        matplotlib.colormaps[colormap]
-        if isinstance(colormap, str)
-        else colormap
-    )
-    normalize_to_unit_interval = Normalize(
-        vmin=color_limits[0], vmax=color_limits[1]
-    )
-    rgba_values = colormap(
-        normalize_to_unit_interval(np.asarray(scalar_values))
-    )
+    colormap = matplotlib.colormaps[colormap] if isinstance(colormap, str) else colormap
+    normalize_to_unit_interval = Normalize(vmin=color_limits[0], vmax=color_limits[1])
+    rgba_values = colormap(normalize_to_unit_interval(np.asarray(scalar_values)))
     return np.ascontiguousarray(rgba_values[:, :3], dtype=np.float32)
 
 
-def sample_colormap_stops(
-    colormap_name: str, n_stops: int = 32
-) -> List[List[float]]:
+def sample_colormap_stops(colormap_name: str, n_stops: int = 32) -> List[List[float]]:
     """
     Sample a matplotlib colormap into ``[position, r, g, b]`` stops.
 
@@ -395,9 +383,7 @@ def sample_colormap_stops(
     return stops
 
 
-def write_colormap_lut(
-    bundle_dir: Path, colormap_name: str, n_stops: int = 32
-) -> str:
+def write_colormap_lut(bundle_dir: Path, colormap_name: str, n_stops: int = 32) -> str:
     """
     Write a colormap's stops to ``assets/colormaps/<cmap>.json`` in the bundle.
 
@@ -513,9 +499,7 @@ def pyvista_mesh_to_frame(
     if faces_flat.size == 0:
         triangle_vertex_indices = np.zeros((0, 3), dtype=np.int32)
     else:
-        triangle_vertex_indices = faces_flat.reshape(-1, 4)[:, 1:4].astype(
-            np.int32
-        )
+        triangle_vertex_indices = faces_flat.reshape(-1, 4)[:, 1:4].astype(np.int32)
 
     scalar_values: Optional[np.ndarray] = None
     if scalar_name is not None and scalar_name in triangulated.point_data:
@@ -668,9 +652,7 @@ def write_mesh_sequence_alembic(
 
     for frame in frames:
         # Write Y-up so Blender's Alembic import rotation lands it at true Z-up.
-        imath_points = _numpy_points_to_v3f(
-            imath, _zup_to_yup(frame.points_xyz)
-        )
+        imath_points = _numpy_points_to_v3f(imath, _zup_to_yup(frame.points_xyz))
 
         # Flatten triangle indices and build the per-face vertex-count stream
         # (all 3, since we triangulated).
@@ -682,9 +664,7 @@ def write_mesh_sequence_alembic(
         )
 
         mesh_schema.set(
-            OPolyMeshSchemaSample(
-                imath_points, imath_face_indices, imath_face_counts
-            )
+            OPolyMeshSchemaSample(imath_points, imath_face_indices, imath_face_counts)
         )
 
         if color_param is not None:
@@ -746,9 +726,7 @@ def _coloring_scalar_name(spec: "VarSpec") -> Optional[str]:
         return geometry.scalar  # may be None -> solid color
     if isinstance(spec, VectorSpec):
         return geometry.scale_by  # may be None -> fall back to active scalar
-    return getattr(geometry, "scalar", None) or getattr(
-        geometry, "varname", None
-    )
+    return getattr(geometry, "scalar", None) or getattr(geometry, "varname", None)
 
 
 def _build_object_entry(
@@ -769,12 +747,8 @@ def _build_object_entry(
     from .varspec import VolumeSpec
 
     if isinstance(spec, VolumeSpec):
-        return _build_volume_entry(
-            spec, dataset, times, data_subdir, running_bounds
-        )
-    return _build_mesh_entry(
-        spec, dataset, times, data_subdir, fps, running_bounds
-    )
+        return _build_volume_entry(spec, dataset, times, data_subdir, running_bounds)
+    return _build_mesh_entry(spec, dataset, times, data_subdir, fps, running_bounds)
 
 
 def _build_mesh_entry(
@@ -813,12 +787,8 @@ def _build_mesh_entry(
         frames.append(frame)
         running_bounds = _accumulate_bounds(running_bounds, frame.points_xyz)
         if frame.scalar_values is not None and len(frame.scalar_values) > 0:
-            global_scalar_min = min(
-                global_scalar_min, float(frame.scalar_values.min())
-            )
-            global_scalar_max = max(
-                global_scalar_max, float(frame.scalar_values.max())
-            )
+            global_scalar_min = min(global_scalar_min, float(frame.scalar_values.min()))
+            global_scalar_max = max(global_scalar_max, float(frame.scalar_values.max()))
 
     # ---- Decide coloring: solid color, or baked colormap from the scalar
     uses_scalar_coloring = (
@@ -847,9 +817,7 @@ def _build_mesh_entry(
     object_subdir = data_subdir / spec.name
     object_subdir.mkdir(parents=True, exist_ok=True)
     alembic_path = object_subdir / "sequence.abc"
-    write_mesh_sequence_alembic(
-        alembic_path, frames, fps=fps, object_name=spec.name
-    )
+    write_mesh_sequence_alembic(alembic_path, frames, fps=fps, object_name=spec.name)
 
     # ---- Build the manifest material
     material = appearance.to_blender_material()
@@ -882,8 +850,7 @@ def _build_mesh_entry(
     # actually vary across frames (they usually do for isosurfaces, but not
     # always -- a rigidly translating feature can keep a constant count).
     distinct_frame_shapes = {
-        (len(frame.points_xyz), len(frame.triangle_vertex_indices))
-        for frame in frames
+        (len(frame.points_xyz), len(frame.triangle_vertex_indices)) for frame in frames
     }
     topology_label = (
         "heterogeneous" if len(distinct_frame_shapes) > 1 else "homogeneous"
@@ -1021,10 +988,7 @@ def _build_volume_entry(
     y_name = coordinate_names["y"]
     z_name = coordinate_names["z"]
     for coordinate_name in (x_name, y_name, z_name):
-        if (
-            coordinate_name not in dataset.coords
-            or dataset[coordinate_name].ndim != 1
-        ):
+        if coordinate_name not in dataset.coords or dataset[coordinate_name].ndim != 1:
             raise NotImplementedError(
                 "VDB volume export requires a rectilinear grid with 1-D x/y/z"
                 f" coordinates; '{coordinate_name}' is missing or"
@@ -1066,13 +1030,9 @@ def _build_volume_entry(
         if spec.geometry.threshold:
             low_threshold, high_threshold = spec.geometry.threshold
             if low_threshold is not None:
-                dense_array = np.where(
-                    dense_array < low_threshold, 0.0, dense_array
-                )
+                dense_array = np.where(dense_array < low_threshold, 0.0, dense_array)
             if high_threshold is not None:
-                dense_array = np.where(
-                    dense_array > high_threshold, 0.0, dense_array
-                )
+                dense_array = np.where(dense_array > high_threshold, 0.0, dense_array)
         dense_array = np.nan_to_num(dense_array, nan=0.0)
         frame_arrays.append(dense_array)
 
@@ -1202,11 +1162,13 @@ def _compute_camera_manifest(
     # Unit view direction from azimuth/elevation, then the camera offset vector.
     azimuth = math.radians(camera_config.azimuth_deg)
     elevation = math.radians(camera_config.elevation_deg)
-    offset = np.array([
-        distance * math.cos(elevation) * math.cos(azimuth),
-        distance * math.cos(elevation) * math.sin(azimuth),
-        distance * math.sin(elevation),
-    ])
+    offset = np.array(
+        [
+            distance * math.cos(elevation) * math.cos(azimuth),
+            distance * math.cos(elevation) * math.sin(azimuth),
+            distance * math.sin(elevation),
+        ]
+    )
 
     n_times = len(render_times)
     frame_end = frame_start + max(n_times - 1, 0)
@@ -1232,51 +1194,52 @@ def _compute_camera_manifest(
             for time_index, (feature_x, feature_y) in enumerate(track):
                 look_at = [feature_x, feature_y, float(center[2])]
                 location = [look_at[i] + float(offset[i]) for i in range(3)]
-                keyframes.append({
-                    "frame": frame_start + time_index,
-                    "location": location,
-                    "look_at": look_at,
-                    "up": up_vector,
-                })
+                keyframes.append(
+                    {
+                        "frame": frame_start + time_index,
+                        "location": location,
+                        "look_at": look_at,
+                        "up": up_vector,
+                    }
+                )
 
     if mode == "orbit" and n_times > 1:
         n_keyframes = max(2, camera_config.n_orbit_keyframes)
         for keyframe_index in range(n_keyframes):
             fraction = keyframe_index / (n_keyframes - 1)
-            frame = int(
-                round(frame_start + fraction * (frame_end - frame_start))
-            )
+            frame = int(round(frame_start + fraction * (frame_end - frame_start)))
             orbit_azimuth = (
-                azimuth
-                + 2 * math.pi * camera_config.orbit_revolutions * fraction
+                azimuth + 2 * math.pi * camera_config.orbit_revolutions * fraction
             )
             location = [
                 float(
-                    center[0]
-                    + distance * math.cos(elevation) * math.cos(orbit_azimuth)
+                    center[0] + distance * math.cos(elevation) * math.cos(orbit_azimuth)
                 ),
                 float(
-                    center[1]
-                    + distance * math.cos(elevation) * math.sin(orbit_azimuth)
+                    center[1] + distance * math.cos(elevation) * math.sin(orbit_azimuth)
                 ),
                 float(center[2] + distance * math.sin(elevation)),
             ]
-            keyframes.append({
-                "frame": frame,
-                "location": location,
-                "look_at": center_point,
-                "up": up_vector,
-            })
+            keyframes.append(
+                {
+                    "frame": frame,
+                    "location": location,
+                    "look_at": center_point,
+                    "up": up_vector,
+                }
+            )
 
     if not keyframes:
         # Static (also the fallback when follow/orbit produced nothing).
         location = [float(center[i] + offset[i]) for i in range(3)]
-        keyframes = [{
-            "frame": frame_start,
-            "location": location,
-            "look_at": center_point,
-            "up": up_vector,
-        }]
+        keyframes = [
+            {
+                "frame": frame_start,
+                "location": location,
+                "look_at": center_point,
+                "up": up_vector,
+            }
+        ]
 
     return {
         "type": "perspective",
@@ -1352,7 +1315,7 @@ def export_scene_to_blender(
         resolved_origin_shift: Optional[Tuple[float, float, float]] = (
             float(horizontal_center[0]),  # x -> centered
             float(horizontal_center[1]),  # y -> centered
-            float(bounds_min[2]),         # z -> floored at data z_min
+            float(bounds_min[2]),  # z -> floored at data z_min
         )
     else:
         resolved_origin_shift = transform.origin_shift
@@ -1369,13 +1332,15 @@ def export_scene_to_blender(
                 tuple(coloring["clim"]),
                 coloring.get("label", ""),
             )
-            colorbar_annotations.append({
-                "for": object_entry["name"],
-                "cmap": coloring["cmap"],
-                "clim": coloring["clim"],
-                "label": coloring.get("label", ""),
-                "image": colorbar_image,
-            })
+            colorbar_annotations.append(
+                {
+                    "for": object_entry["name"],
+                    "cmap": coloring["cmap"],
+                    "clim": coloring["clim"],
+                    "label": coloring.get("label", ""),
+                    "image": colorbar_image,
+                }
+            )
 
     # ---- Assemble the manifest
     manifest = {

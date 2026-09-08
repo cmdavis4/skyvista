@@ -1310,12 +1310,8 @@ class SphericalGridBuilder(GridBuilder):
                 range_3d = np.broadcast_to(
                     range_vals[:, np.newaxis, np.newaxis], out_shape
                 )
-                azimuth_3d = np.broadcast_to(
-                    azimuth[np.newaxis, :, :], out_shape
-                )
-                elevation_3d = np.broadcast_to(
-                    elevation[np.newaxis, :, :], out_shape
-                )
+                azimuth_3d = np.broadcast_to(azimuth[np.newaxis, :, :], out_shape)
+                elevation_3d = np.broadcast_to(elevation[np.newaxis, :, :], out_shape)
 
                 range_vals = range_3d
                 azimuth = azimuth_3d
@@ -1402,9 +1398,7 @@ class SphericalGridBuilder(GridBuilder):
                     found[axis] = name
                 else:
                     aliases = SPHERICAL_COORD_NAMES[axis][:4]
-                    missing.append(
-                        f"{axis} (looked for: {', '.join(aliases)}, ...)"
-                    )
+                    missing.append(f"{axis} (looked for: {', '.join(aliases)}, ...)")
             available = sorted(set(ds.coords.keys()) | set(ds.sizes.keys()))
             raise ValueError(
                 "Could not resolve spherical coordinates from this dataset.\n"

@@ -186,7 +186,11 @@ NAMED_COLORS = {
 
 def parse_color(color_spec):
     """Parse '#rrggbb' or a basic color name to a linear RGBA tuple."""
-    if isinstance(color_spec, str) and color_spec.startswith("#") and len(color_spec) == 7:
+    if (
+        isinstance(color_spec, str)
+        and color_spec.startswith("#")
+        and len(color_spec) == 7
+    ):
         srgb = tuple(int(color_spec[i : i + 2], 16) / 255.0 for i in (1, 3, 5))
     else:
         srgb = NAMED_COLORS.get(str(color_spec).lower(), (0.8, 0.8, 0.8))
@@ -267,11 +271,7 @@ def make_surface_material(name, material_spec):
     # color source and set Emission Strength so the surface self-illuminates.
     emission_strength = float(shader.get("emission_strength", 0.0))
     emission_from = shader.get("emission_from")
-    if (
-        principled is not None
-        and emission_from == "color"
-        and emission_strength > 0.0
-    ):
+    if principled is not None and emission_from == "color" and emission_strength > 0.0:
         emission_color_input = _principled_emission_color_input(principled)
         if emission_color_input is not None:
             if color_output_socket is not None:
@@ -289,8 +289,11 @@ def make_surface_material(name, material_spec):
         for blend_attr in ("blend_method", "surface_render_method"):
             if hasattr(material, blend_attr):
                 try:
-                    setattr(material, blend_attr, "BLEND"
-                            if blend_attr == "blend_method" else "BLENDED")
+                    setattr(
+                        material,
+                        blend_attr,
+                        "BLEND" if blend_attr == "blend_method" else "BLENDED",
+                    )
                 except (TypeError, AttributeError):
                     pass
     return material
@@ -449,7 +452,9 @@ def import_volume_object(bundle_dir, object_spec, root_empty, frame_start, n_fra
             pass
 
     parent_keep_local(volume_object, root_empty)
-    material = make_volume_material(object_spec["name"], object_spec["material"], bundle_dir)
+    material = make_volume_material(
+        object_spec["name"], object_spec["material"], bundle_dir
+    )
     volume_object.data.materials.clear()
     volume_object.data.materials.append(material)
     return [volume_object]
@@ -461,7 +466,7 @@ def import_volume_object(bundle_dir, object_spec, root_empty, frame_start, n_fra
 def aim_camera(camera_object, location, look_at):
     """Position a camera and rotate it to look at a target point."""
     camera_object.location = location
-    direction = (Vector(look_at) - Vector(location))
+    direction = Vector(look_at) - Vector(location)
     if direction.length > 0:
         camera_object.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
 
@@ -908,7 +913,9 @@ def main():
         carrier = object_spec.get("geometry", {}).get("carrier")
         try:
             if carrier == "alembic":
-                built_objects += import_alembic_object(bundle_dir, object_spec, root_empty)
+                built_objects += import_alembic_object(
+                    bundle_dir, object_spec, root_empty
+                )
             elif carrier == "vdb_sequence":
                 built_objects += import_volume_object(
                     bundle_dir, object_spec, root_empty, frame_start, n_frames
@@ -937,8 +944,10 @@ def main():
     try:
         setup_compositing(scene, manifest, bundle_dir, add_bloom=needs_bloom)
     except Exception as compositing_error:
-        print(f"  [WARN] compositing skipped: "
-              f"{type(compositing_error).__name__}: {compositing_error}")
+        print(
+            f"  [WARN] compositing skipped: "
+            f"{type(compositing_error).__name__}: {compositing_error}"
+        )
 
     blend_path = bundle_dir / f"{bundle_dir.name}.blend"
     bpy.ops.wm.save_as_mainfile(filepath=str(blend_path))

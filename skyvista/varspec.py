@@ -185,9 +185,7 @@ class ContourSpec(VarSpec):
         # Sample scalar field if different from contour variable
         if self.geometry.scalar and self.geometry.scalar != varname:
             add_scalar_to_grid(grid, ds, self.geometry.scalar)
-            mesh = mesh.sample(
-                grid, pass_point_data=False, pass_cell_data=False
-            )
+            mesh = mesh.sample(grid, pass_point_data=False, pass_cell_data=False)
             mesh.set_active_scalars(self.geometry.scalar)
 
         return mesh
@@ -201,9 +199,7 @@ class VolumeSpec(VarSpec):
     Renders scalar field data as a 3D volume with opacity transfer function.
     """
 
-    geometry: VolumeGeometry = field(
-        default_factory=lambda: VolumeGeometry(varname="")
-    )
+    geometry: VolumeGeometry = field(default_factory=lambda: VolumeGeometry(varname=""))
     appearance: VolumeAppearance = field(default_factory=VolumeAppearance)
 
     def __post_init__(self):
@@ -250,9 +246,7 @@ class VectorSpec(VarSpec):
     Creates arrow glyphs from vector field data.
     """
 
-    geometry: VectorGeometry = field(
-        default_factory=lambda: VectorGeometry(varname="")
-    )
+    geometry: VectorGeometry = field(default_factory=lambda: VectorGeometry(varname=""))
     appearance: VectorAppearance = field(default_factory=VectorAppearance)
 
     def __post_init__(self):
@@ -338,16 +332,12 @@ class SliceSpec(VarSpec):
     Extracts a 2D slice from 3D scalar field data.
     """
 
-    geometry: SliceGeometry = field(
-        default_factory=lambda: SliceGeometry(varname="")
-    )
+    geometry: SliceGeometry = field(default_factory=lambda: SliceGeometry(varname=""))
     appearance: Appearance = field(default_factory=Appearance)
 
     def __post_init__(self):
         if self.name is None:
-            self.name = (
-                f"slice_{self.geometry.varname}_{self.geometry.slice_dim}"
-            )
+            self.name = f"slice_{self.geometry.varname}_{self.geometry.slice_dim}"
 
     def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
         from .grids import resolve_coordinates
@@ -395,9 +385,7 @@ class SliceSpec(VarSpec):
         grids = {slice_dim: grid_sliced, dim1: grid1, dim2: grid2}
 
         create_kwargs = dict(self.pyvista_create_kwargs)
-        mesh = pv.StructuredGrid(
-            grids["x"], grids["y"], grids["z"], **create_kwargs
-        )
+        mesh = pv.StructuredGrid(grids["x"], grids["y"], grids["z"], **create_kwargs)
 
         # Add variable data
         varname = self.geometry.varname
@@ -417,17 +405,13 @@ class TrajectorySpec(VarSpec):
     """
 
     geometry: TrajectoryGeometry = field(default_factory=TrajectoryGeometry)
-    appearance: TrajectoryAppearance = field(
-        default_factory=TrajectoryAppearance
-    )
+    appearance: TrajectoryAppearance = field(default_factory=TrajectoryAppearance)
     limit: Optional[int] = 1000
 
     def __post_init__(self):
         if self.name is None:
             style = self.appearance.style
-            scalar_part = (
-                f"_{self.geometry.scalar}" if self.geometry.scalar else ""
-            )
+            scalar_part = f"_{self.geometry.scalar}" if self.geometry.scalar else ""
             self.name = f"trajectory_{style}{scalar_part}"
 
     def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
@@ -464,9 +448,7 @@ class TrajectorySpec(VarSpec):
             return self._create_particle_mesh(ds, trajectory_dim)
 
         # Extract trajectory data for tube rendering
-        trajectories_points_data = self._extract_trajectory_data(
-            ds, trajectory_dim
-        )
+        trajectories_points_data = self._extract_trajectory_data(ds, trajectory_dim)
 
         if not trajectories_points_data:
             return pv.PolyData()
@@ -528,9 +510,7 @@ class TrajectorySpec(VarSpec):
 
         return trajectories_points_data
 
-    def _create_particle_mesh(
-        self, ds: xr.Dataset, trajectory_dim: str
-    ) -> pv.DataSet:
+    def _create_particle_mesh(self, ds: xr.Dataset, trajectory_dim: str) -> pv.DataSet:
         """Create particle-style mesh (spheres at final positions)."""
         from carlee_tools import maybe_cast_to_float
 
@@ -538,11 +518,13 @@ class TrajectorySpec(VarSpec):
         if "time" in ds.dims:
             ds = ds.isel(time=-1)
 
-        points = np.column_stack([
-            ds["x"].values,
-            ds["y"].values,
-            ds["z"].values,
-        ])
+        points = np.column_stack(
+            [
+                ds["x"].values,
+                ds["y"].values,
+                ds["z"].values,
+            ]
+        )
 
         valid_mask = ~np.isnan(points).any(axis=1)
         points = points[valid_mask]
@@ -587,9 +569,7 @@ class TrajectorySpec(VarSpec):
         tube_resolution = self.geometry.tube_resolution
 
         # Create polydata with all trajectory lines
-        polydata = self._create_trajectory_polydata(
-            trajectory_data_list, scalar
-        )
+        polydata = self._create_trajectory_polydata(trajectory_data_list, scalar)
 
         # Convert to tubes
         tube_mesh = polydata.tube(
@@ -632,9 +612,7 @@ class TrajectorySpec(VarSpec):
             if len(head_meshes) == 1:
                 heads_mesh = head_meshes[0]
             else:
-                heads_mesh = head_meshes[0].merge(
-                    head_meshes[1:], merge_points=False
-                )
+                heads_mesh = head_meshes[0].merge(head_meshes[1:], merge_points=False)
             meshes_to_merge.append(heads_mesh)
 
         if len(meshes_to_merge) == 1:
@@ -725,24 +703,26 @@ class TrajectorySpec(VarSpec):
 
         head = pv.PolyData()
         head.points = points
-        faces = np.array([
-            3,
-            0,
-            1,
-            2,  # Base
-            3,
-            0,
-            3,
-            1,  # Side 1
-            3,
-            1,
-            3,
-            2,  # Side 2
-            3,
-            2,
-            3,
-            0,  # Side 3
-        ])
+        faces = np.array(
+            [
+                3,
+                0,
+                1,
+                2,  # Base
+                3,
+                0,
+                3,
+                1,  # Side 1
+                3,
+                1,
+                3,
+                2,  # Side 2
+                3,
+                2,
+                3,
+                0,  # Side 3
+            ]
+        )
         head.faces = faces
         return head
 

@@ -62,9 +62,7 @@ class Scene:
     _specs: List[Tuple[xr.Dataset, VarSpec]] = field(default_factory=list)
 
     # Cached bounds meshes keyed by dataset id
-    _bounds_meshes: Dict[int, pv.PolyData] = field(
-        default_factory=dict, repr=False
-    )
+    _bounds_meshes: Dict[int, pv.PolyData] = field(default_factory=dict, repr=False)
 
     # Cached plotter for interactive use
     _plotter: Optional[pv.Plotter] = field(default=None, repr=False)

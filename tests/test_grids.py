@@ -22,7 +22,6 @@ from skyvista.grids import (
     is_geographic_grid,
 )
 
-
 # =============================================================================
 # FIXTURES
 # =============================================================================
@@ -82,9 +81,7 @@ def spherical_2d_ds():
     time_offset = np.arange(n_time) * 36
     azimuth_2d = (az_base[:, np.newaxis] + time_offset[np.newaxis, :]) % 360
     el_base = np.array([0.5, 1.5, 2.4, 3.4, 5.3])
-    elevation_2d = np.broadcast_to(
-        el_base[:, np.newaxis], (n_vscan, n_time)
-    ).copy()
+    elevation_2d = np.broadcast_to(el_base[:, np.newaxis], (n_vscan, n_time)).copy()
     data = np.random.randn(n_range, n_vscan, n_time) * 10 + 20
     return xr.Dataset(
         {"reflectivity": (["range", "volume_scan", "time"], data)},
@@ -286,9 +283,7 @@ class TestAddScalar:
         builder = detect_grid_type(rectilinear_ds)
         mesh = builder.build_mesh(rectilinear_ds)
         ds_extra = rectilinear_ds.assign(
-            unrelated=xr.DataArray(
-                np.zeros((3, 4)), dims=["a", "b"]
-            )
+            unrelated=xr.DataArray(np.zeros((3, 4)), dims=["a", "b"])
         )
         with pytest.raises(ValueError, match="No dimensions overlap"):
             builder.add_scalar(mesh, ds_extra, "unrelated")
@@ -298,9 +293,7 @@ class TestAddScalar:
         builder = detect_grid_type(rectilinear_ds)
         mesh = builder.build_mesh(rectilinear_ds)
         ds_extra = rectilinear_ds.assign(
-            timed=xr.DataArray(
-                np.zeros((10, 15, 8, 3)), dims=["x", "y", "z", "time"]
-            )
+            timed=xr.DataArray(np.zeros((10, 15, 8, 3)), dims=["x", "y", "z", "time"])
         )
         with pytest.raises(ValueError, match="extra dimensions"):
             builder.add_scalar(mesh, ds_extra, "timed")
