@@ -1306,6 +1306,11 @@ def main():
         scene.render.image_settings.file_format = "PNG"
         scene.render.image_settings.color_mode = "RGBA"
         is_animation = n_frames > 1
+        # Skip frames already on disk, and claim each frame with a placeholder
+        # when it starts. A long animation interrupted part-way then resumes
+        # where it stopped when the same command is run again.
+        scene.render.use_overwrite = False
+        scene.render.use_placeholder = True
         # An animation appends frame numbers to this prefix itself; a still
         # does not, so name it after its frame explicitly.
         scene.render.filepath = (
