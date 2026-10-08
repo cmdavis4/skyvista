@@ -464,9 +464,11 @@ def make_cloud_material(name, material_spec):
 
     Units: the grids are in km^-1, and the shader converts them to m^-1. The
     volume object's render space is set to OBJECT, where one unit is one meter
-    of the VDB's physical transform. Cycles then integrates optical depth in
-    meters, whatever scale or vertical exaggeration the scene transform
-    applies.
+    of the VDB's physical transform, so the optical depth is physical for any
+    *uniform* scene scale. Vertical exaggeration is different: Cycles
+    compensates density for a single scale factor, so stretching z inflates
+    vertical optical depths (an isotropic slab of optical depth 10 reflected
+    0.856, 0.910 and 0.958 at 1x, 2x and 5x). The exporter warns about it.
     """
     material = bpy.data.materials.new(name=f"{name}_mat")
     material.use_nodes = True
@@ -628,7 +630,7 @@ def import_volume_object(bundle_dir, object_spec, root_empty, frame_start, n_fra
         material = make_cloud_material(object_spec["name"], material_spec)
         render_settings = volume_data.render
         # Density per object unit (= per meter of the VDB transform), so the
-        # optical depth is physical whatever the scene scale/exaggeration.
+        # optical depth is physical for any uniform scene scale.
         if hasattr(render_settings, "space"):
             render_settings.space = "OBJECT"
         # Grid values below the export's extinction floor are clear air.
@@ -924,8 +926,11 @@ def setup_ground(scene, manifest, transform, root_empty):
     Add a matte, spectrally neutral ground plane if the manifest asks for one.
 
     The plane sits at ``world.ground_height`` (data units) under the scene
-    transform and extends 1000 km in every direction, far enough that its edge
-    never shows against the sky. It is parented to the root Empty like the
+    transform and extends 10,000 km in every direction. Its edge must lie
+    below the sky texture's horizon: seen from height h at distance L it sits
+    atan(h / L) below horizontal, and between that edge and the horizon the
+    sky's dark below-horizon region would show as a stripe. At 10,000 km the
+    edge is within 0.15 deg of the horizon even from 25 km up. It is parented to the root Empty like the
     data, so it follows any transform edit. A Diffuse BSDF is exactly
     Lambertian, so the albedo means what it says: the fraction of light
     reflected, which then brightens cloud bases from below.
@@ -936,7 +941,7 @@ def setup_ground(scene, manifest, transform, root_empty):
         return None
 
     # A square plane in data units (meters), parented under the root Empty.
-    half_width_data_units = 1.0e6
+    half_width_data_units = 1.0e7
     ground_height = float(world_block.get("ground_height", 0.0))
     mesh = bpy.data.meshes.new("skyvista_ground")
     corners = [
@@ -970,7 +975,7 @@ def setup_ground(scene, manifest, transform, root_empty):
     mesh.materials.append(material)
 
     # Let the camera see the ground out to its edge, not just the default
-    # 1000-unit clip distance (the plane is 2000 km across).
+    # 1000-unit clip distance (the plane is 20,000 km across).
     if scene.camera is not None:
         plane_reach = (
             2.0 * half_width_data_units * float(transform.get("scale", 1.0e-3))
@@ -1299,8 +1304,14 @@ def main():
         # disk; Blender appends the frame number and extension to this prefix.
         scene.render.image_settings.file_format = "PNG"
         scene.render.image_settings.color_mode = "RGBA"
-        scene.render.filepath = str(render_dir / "frame_")
         is_animation = n_frames > 1
+        # An animation appends frame numbers to this prefix itself; a still
+        # does not, so name it after its frame explicitly.
+        scene.render.filepath = (
+            str(render_dir / "frame_")
+            if is_animation
+            else str(render_dir / f"frame_{scene.frame_start:04d}")
+        )
         bpy.ops.render.render(animation=is_animation, write_still=not is_animation)
         print(f"Rendered {n_frames} frame(s) to {render_dir}")
 

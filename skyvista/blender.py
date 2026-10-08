@@ -322,11 +322,16 @@ class BlenderExportConfig:
 
         Uses the "physical_sky" world (radiometrically consistent sun and sky,
         automatic exposure) over a ground of albedo 0.15. The render keeps 128
-        volume bounces and denoising. Pass any field as a keyword to override
-        it, e.g. ``for_clouds(fps=12)``.
+        volume bounces and denoising. The camera sits lower and closer than the
+        general default (10 deg elevation, 1.2 bounding-box diagonals, 35 mm),
+        which is how clouds are usually seen. Pass any field as a keyword to
+        override it, e.g. ``for_clouds(fps=12)``.
         """
         config = cls(
             world=BlenderWorldConfig(preset="physical_sky", ground_albedo=0.15),
+            camera=BlenderCameraConfig(
+                elevation_deg=10.0, distance_factor=1.2, lens_mm=35.0
+            ),
         )
         for field_name, value in overrides.items():
             setattr(config, field_name, value)
@@ -1185,8 +1190,18 @@ CLOUD_MIE_DIAMETER_GRID_PREFIX = "mie_diameter_"
 MAX_UNIFORM_VERTICAL_LEVELS = 2000
 
 
+# The default uniform vertical spacing is never finer than this fraction of
+# the horizontal grid spacing. Near-surface model levels can be ~20 m apart
+# under a ~500 m horizontal grid; resolving them would multiply the voxel
+# count ~5x while adding no visible structure, since every cloud feature is
+# at least one horizontal cell wide.
+MIN_VERTICAL_SPACING_FRACTION_OF_HORIZONTAL = 0.25
+
+
 def choose_uniform_vertical_spacing(
-    level_heights: np.ndarray, cloudy_level_mask: np.ndarray
+    level_heights: np.ndarray,
+    cloudy_level_mask: np.ndarray,
+    horizontal_spacing: Optional[float] = None,
 ) -> float:
     """
     Pick a uniform vertical voxel size that preserves the cloudy layers.
@@ -1197,11 +1212,14 @@ def choose_uniform_vertical_spacing(
     native spacing found among levels that hold condensate (and their
     immediate neighbours). The cloudy part of the column therefore keeps its
     full native resolution, while clear layers far above or below do not force
-    a needlessly fine grid.
+    a needlessly fine grid. The result is floored at
+    ``MIN_VERTICAL_SPACING_FRACTION_OF_HORIZONTAL`` of the horizontal spacing.
 
     Args:
         level_heights: Native level heights (m), increasing.
         cloudy_level_mask: True for levels containing any condensate.
+        horizontal_spacing: Smaller of the x and y grid spacings (m), or None
+            to skip the floor.
 
     Returns:
         The uniform spacing in meters.
@@ -1210,8 +1228,16 @@ def choose_uniform_vertical_spacing(
     # A spacing touches a cloudy layer if either of its two levels is cloudy.
     spacing_touches_cloud = cloudy_level_mask[:-1] | cloudy_level_mask[1:]
     if spacing_touches_cloud.any():
-        return float(level_spacings[spacing_touches_cloud].min())
-    return float(level_spacings.min())
+        finest_cloudy_spacing = float(level_spacings[spacing_touches_cloud].min())
+    else:
+        finest_cloudy_spacing = float(level_spacings.min())
+    # Do not resolve vertically far beyond what the horizontal grid resolves.
+    if horizontal_spacing is None:
+        return finest_cloudy_spacing
+    return max(
+        finest_cloudy_spacing,
+        MIN_VERTICAL_SPACING_FRACTION_OF_HORIZONTAL * float(horizontal_spacing),
+    )
 
 
 def interpolate_to_levels(
@@ -1441,7 +1467,12 @@ def _build_cloud_entry(
         vertical_spacing = float(geometry.vertical_spacing)
     else:
         vertical_spacing = choose_uniform_vertical_spacing(
-            native_heights, z_mask[z_slice]
+            native_heights,
+            z_mask[z_slice],
+            horizontal_spacing=min(
+                float(np.mean(np.diff(x_coordinates))),
+                float(np.mean(np.diff(y_coordinates))),
+            ),
         )
     column_depth = native_heights[-1] - native_heights[0]
     if column_depth / vertical_spacing + 1 > MAX_UNIFORM_VERTICAL_LEVELS:
@@ -1784,6 +1815,22 @@ def export_scene_to_blender(
     bundle_dir = Path(path)
     data_dir = bundle_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
+
+    # Optical depth cannot stay physical under an anisotropic stretch: Cycles
+    # compensates volume density for one uniform scale factor only.
+    if config.transform.z_exaggeration != 1.0:
+        from .varspec import CloudSpec
+
+        if any(isinstance(spec, CloudSpec) for _, spec in scene._specs):
+            import warnings
+
+            warnings.warn(
+                "z_exaggeration != 1 makes physically rendered clouds optically "
+                "thicker along the vertical than the data imply (Cycles scales "
+                "volume density by a single factor). Use z_exaggeration=1 for "
+                "radiometrically faithful clouds.",
+                stacklevel=2,
+            )
 
     render_times = times if times is not None else scene._get_all_times()
     n_frames = len(render_times)

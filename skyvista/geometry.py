@@ -142,7 +142,8 @@ class CloudGeometry(Geometry):
         vertical_spacing: Uniform vertical voxel size in meters for the
             Blender (VDB) export. VDB voxels are uniform, so stretched model
             levels are linearly interpolated onto this spacing. None uses the
-            finest native spacing among the levels that contain condensate.
+            finest native spacing among the levels that contain condensate,
+            but no finer than a quarter of the horizontal grid spacing.
         extinction_floor: Render extinction (m^-1) below which a voxel is
             treated as clear air and dropped from the VDB. The default 1e-6
             m^-1 is an optical depth of 0.001 per kilometre.

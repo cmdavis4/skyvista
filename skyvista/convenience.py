@@ -223,7 +223,8 @@ def make_clouds(
         air_density: Air-density variable name, constant (kg m^-3), or None to
             search common names, then fall back to the standard atmosphere.
         vertical_spacing: Uniform vertical voxel size (m) for the VDB export;
-            None picks the finest native spacing among cloudy levels.
+            None picks the finest native spacing among cloudy levels,
+            floored at a quarter of the horizontal spacing.
         extinction_floor: Extinction (m^-1) below which voxels count as clear.
         extinction_scale: Multiplier on extinction; 1.0 is physical.
         name: Unique identifier.
