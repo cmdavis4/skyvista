@@ -350,8 +350,13 @@ def main() -> None:
     parser.add_argument(
         "--workers",
         type=int,
-        default=12,
-        help="Export processes (each needs ~10-15 GB for a 400x400x330 grid).",
+        default=8,
+        help=(
+            "Export processes. Each needs ~10-20 GB for a 400x400x330 grid."
+            " More is not faster: with 24 workers on a 64-core node, kernel"
+            " (system) CPU time reached ~37%% and each frame took ~25 min,"
+            " versus ~45 s each with 8 workers."
+        ),
     )
     parser.add_argument("--fps", type=float, default=15.0, help="Video frame rate.")
     parser.add_argument("--blender", default=None, help="Blender executable.")
