@@ -1321,11 +1321,23 @@ def write_multigrid_vdb(
     openvdb.write(str(file_path), grids=vdb_grids)
 
 
+# Mixing ratio (kg/kg) above which a cell counts as cloudy when cropping the
+# export. Not 0: lossily compressed output (e.g. RAMS ZFP-compressed lite
+# files) and advection undershoots leave |q| ~ 1e-10 noise across the whole
+# domain, which would defeat the crop. 1e-8 kg/kg of 10 um droplets gives an
+# extinction of ~3e-6 m^-1, the same order as the default extinction floor, and
+# precipitation at 1e-8 kg/kg is orders of magnitude fainter still.
+FOOTPRINT_MIXING_RATIO_THRESHOLD = 1.0e-8
+
+
 def _cloud_footprint(
     spec, dataset, times: List[Any], coordinate_names: Dict[str, str]
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Where any hydrometeor exists at any render time, as 1-D masks per axis.
+    Where hydrometeors exist at any render time, as 1-D masks per axis.
+
+    A cell counts when its total mixing ratio exceeds
+    ``FOOTPRINT_MIXING_RATIO_THRESHOLD``.
 
     Used to crop the exported volume to the cloudy region (plus a margin), so a
     large domain with one storm does not produce mostly-empty VDBs.
@@ -1358,7 +1370,9 @@ def _cloud_footprint(
                 if total_condensate is None
                 else total_condensate + mixing_ratio
             )
-        has_condensate = (total_condensate > 0.0).transpose(x_name, y_name, z_name)
+        has_condensate = (
+            total_condensate > FOOTPRINT_MIXING_RATIO_THRESHOLD
+        ).transpose(x_name, y_name, z_name)
         has_condensate = np.asarray(has_condensate.values)
         # Project the 3-D occupancy onto each axis.
         x_mask |= has_condensate.any(axis=(1, 2))
