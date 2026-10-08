@@ -7,7 +7,10 @@ of the visualization, independent of how it looks (appearance).
 
 from abc import ABC
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Sequence, Tuple, Union
+
+if TYPE_CHECKING:
+    from .cloud_optics import HydrometeorSpecies
 
 
 @dataclass
@@ -115,3 +118,38 @@ class TrajectoryGeometry(Geometry):
     tube_resolution: int = 4
     head_radial_resolution: int = 30
     max_points: Optional[int] = None
+
+
+@dataclass
+class CloudGeometry(Geometry):
+    """
+    Specifies which hydrometeor fields make up a physically rendered cloud.
+
+    Unlike the other geometries, a cloud is built from several variables at
+    once: one mass mixing ratio per hydrometeor species (and its number
+    concentration, when the scheme predicts one), plus the air density. The
+    optics derived from them are documented in :mod:`skyvista.cloud_optics`.
+
+    Attributes:
+        species: Explicit species list. None selects a preset (see
+            ``microphysics``).
+        microphysics: Preset name ("rams", "cm1_morrison", "generic"), or
+            None to detect it from the variable names. Ignored when
+            ``species`` is given.
+        air_density: Air-density variable name, a constant in kg m^-3, or
+            None to search common names and fall back to the 1976 standard
+            atmosphere.
+        vertical_spacing: Uniform vertical voxel size in meters for the
+            Blender (VDB) export. VDB voxels are uniform, so stretched model
+            levels are linearly interpolated onto this spacing. None uses the
+            finest native spacing among the levels that contain condensate.
+        extinction_floor: Render extinction (m^-1) below which a voxel is
+            treated as clear air and dropped from the VDB. The default 1e-6
+            m^-1 is an optical depth of 0.001 per kilometre.
+    """
+
+    species: Optional[Sequence["HydrometeorSpecies"]] = None
+    microphysics: Optional[str] = None
+    air_density: Union[str, float, None] = None
+    vertical_spacing: Optional[float] = None
+    extinction_floor: float = 1.0e-6

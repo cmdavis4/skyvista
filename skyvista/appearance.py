@@ -164,3 +164,34 @@ class TrajectoryAppearance(Appearance):
         kwargs = super().to_pyvista_kwargs()
         # Silhouettes would be handled separately in render_to_plotter
         return kwargs
+
+
+@dataclass
+class CloudAppearance(Appearance):
+    """
+    Appearance of a physically rendered cloud.
+
+    A cloud has no colormap: its color and brightness come from the optics of
+    the hydrometeors and from the lighting. This class therefore only holds a
+    deliberate departure from physics, for exploration. Leave it at the
+    default for a scientifically faithful render.
+
+    Attributes:
+        extinction_scale: Multiplier on every species' extinction. 1.0 is the
+            physical value; less than 1 makes clouds more transparent.
+        show_scalar_bar: Off by default: a physically rendered cloud has no
+            colormap, so a scalar bar would describe nothing on screen.
+    """
+
+    extinction_scale: float = 1.0
+    show_scalar_bar: bool = False
+
+    def to_blender_material(self) -> Dict[str, Any]:
+        """
+        Describe the cloud material for the Blender manifest.
+
+        The per-species grids and phase functions are filled in by the
+        exporter, which has computed them; this contributes only the
+        appearance-level part.
+        """
+        return {"type": "cloud", "extinction_scale": self.extinction_scale}

@@ -27,12 +27,14 @@ import xarray as xr
 
 from .appearance import (
     Appearance,
+    CloudAppearance,
     ContourAppearance,
     TrajectoryAppearance,
     VectorAppearance,
     VolumeAppearance,
 )
 from .geometry import (
+    CloudGeometry,
     ContourGeometry,
     SliceGeometry,
     TrajectoryGeometry,
@@ -41,6 +43,7 @@ from .geometry import (
 )
 from .scene import Scene
 from .varspec import (
+    CloudSpec,
     ContourSpec,
     SliceSpec,
     TrajectorySpec,
@@ -182,6 +185,66 @@ def make_volume(
         opacity_unit_distance=opacity_unit_distance,
     )
     return VolumeSpec(
+        geometry=geometry,
+        appearance=appearance,
+        name=name,
+        empty_ok=empty_ok,
+        **kwargs,
+    )
+
+
+def make_clouds(
+    species: Optional[List[Any]] = None,
+    microphysics: Optional[str] = None,
+    air_density: Union[str, float, None] = None,
+    vertical_spacing: Optional[float] = None,
+    extinction_floor: float = 1.0e-6,
+    # Appearance
+    extinction_scale: float = 1.0,
+    # VarSpec base
+    name: Optional[str] = None,
+    empty_ok: bool = False,
+    **kwargs,
+) -> CloudSpec:
+    """
+    Create a physically based cloud spec from hydrometeor fields.
+
+    Each species' mixing ratio (and number concentration, if predicted) is
+    converted to visible-wavelength extinction and a phase function; see
+    :mod:`skyvista.cloud_optics` for the physics and its sources. The result
+    is meant for the Blender backend (``Scene.to_blender``), which renders
+    multiple scattering in Cycles. ``Scene.show()`` draws a Beer-Lambert
+    preview.
+
+    Args:
+        species: Explicit list of ``HydrometeorSpecies``; None uses a preset.
+        microphysics: Preset name ("rams", "cm1_morrison", "generic"), or None
+            to detect it from the dataset's variable names.
+        air_density: Air-density variable name, constant (kg m^-3), or None to
+            search common names, then fall back to the standard atmosphere.
+        vertical_spacing: Uniform vertical voxel size (m) for the VDB export;
+            None picks the finest native spacing among cloudy levels.
+        extinction_floor: Extinction (m^-1) below which voxels count as clear.
+        extinction_scale: Multiplier on extinction; 1.0 is physical.
+        name: Unique identifier.
+        empty_ok: Don't skip when the mesh is empty.
+        **kwargs: Additional VarSpec kwargs.
+
+    Returns:
+        CloudSpec instance.
+
+    Example:
+        >>> spec = make_clouds(microphysics="rams")
+    """
+    geometry = CloudGeometry(
+        species=species,
+        microphysics=microphysics,
+        air_density=air_density,
+        vertical_spacing=vertical_spacing,
+        extinction_floor=extinction_floor,
+    )
+    appearance = CloudAppearance(extinction_scale=extinction_scale)
+    return CloudSpec(
         geometry=geometry,
         appearance=appearance,
         name=name,

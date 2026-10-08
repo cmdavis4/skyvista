@@ -9,6 +9,7 @@ Primary API:
 Factory functions (create VarSpecs):
     make_contour       - Create contour/isosurface spec
     make_volume        - Create volume rendering spec
+    make_clouds        - Create physically based cloud spec (hydrometeors)
     make_vectors       - Create vector field spec
     make_slice         - Create 2D slice spec
     make_trajectory    - Create trajectory spec
@@ -52,6 +53,7 @@ from .convenience import (
     # Factory functions
     make_contour,
     make_volume,
+    make_clouds,
     make_vectors,
     make_vector,  # Alias for make_vectors
     make_slice,
@@ -66,6 +68,7 @@ from .varspec import (
     VarSpec,
     ContourSpec,
     VolumeSpec,
+    CloudSpec,
     VectorSpec,
     SliceSpec,
     TrajectorySpec,
@@ -79,6 +82,7 @@ from .geometry import (
     Geometry,
     ContourGeometry,
     VolumeGeometry,
+    CloudGeometry,
     VectorGeometry,
     SliceGeometry,
     TrajectoryGeometry,
@@ -92,6 +96,7 @@ from .appearance import (
     Appearance,
     ContourAppearance,
     VolumeAppearance,
+    CloudAppearance,
     VectorAppearance,
     TrajectoryAppearance,
 )
@@ -143,6 +148,12 @@ from .blender import (
     BlenderTransform,
 )
 
+# Cloud optics: hydrometeor species definitions and microphysics presets
+from .cloud_optics import (
+    MICROPHYSICS_PRESETS,
+    HydrometeorSpecies,
+)
+
 # Example data loader
 from .examples import load_example_storm_data
 
@@ -165,6 +176,7 @@ __all__ = [
     # Factory functions
     "make_contour",
     "make_volume",
+    "make_clouds",
     "make_vectors",
     "make_vector",
     "make_slice",
@@ -173,6 +185,7 @@ __all__ = [
     "VarSpec",
     "ContourSpec",
     "VolumeSpec",
+    "CloudSpec",
     "VectorSpec",
     "SliceSpec",
     "TrajectorySpec",
@@ -180,6 +193,7 @@ __all__ = [
     "Geometry",
     "ContourGeometry",
     "VolumeGeometry",
+    "CloudGeometry",
     "VectorGeometry",
     "SliceGeometry",
     "TrajectoryGeometry",
@@ -187,6 +201,7 @@ __all__ = [
     "Appearance",
     "ContourAppearance",
     "VolumeAppearance",
+    "CloudAppearance",
     "VectorAppearance",
     "TrajectoryAppearance",
     # Grid builders
@@ -223,6 +238,9 @@ __all__ = [
     "BlenderRenderConfig",
     "BlenderTransform",
     "load_example_storm_data",
+    # Cloud optics
+    "HydrometeorSpecies",
+    "MICROPHYSICS_PRESETS",
     # Camera utilities
     "calculate_camera_offset",
     "get_trajectory_camera",

@@ -21,12 +21,14 @@ import xarray as xr
 
 from .appearance import (
     Appearance,
+    CloudAppearance,
     ContourAppearance,
     TrajectoryAppearance,
     VectorAppearance,
     VolumeAppearance,
 )
 from .geometry import (
+    CloudGeometry,
     ContourGeometry,
     Geometry,
     SliceGeometry,
@@ -43,6 +45,7 @@ from .grid_utils import (
 from .grids import get_grid_builder
 
 if TYPE_CHECKING:
+    from .cloud_optics import HydrometeorSpecies, SpeciesOptics
     from .mesh import PVMesh
 
 
@@ -733,4 +736,147 @@ class TrajectorySpec(VarSpec):
         if self.appearance.silhouettes:
             kwargs["silhouette"] = True
 
+        return kwargs
+
+
+# Point-data name of the total cloud extinction on the PyVista preview grid.
+CLOUD_EXTINCTION_VARIABLE = "cloud_extinction"
+
+# Number of samples in the Beer-Lambert opacity transfer function of the
+# PyVista cloud preview. Deliberately NOT 256: PyVista copies an opacity array
+# whose length equals the lookup table's size (256) straight into the 8-bit
+# alpha channel without scaling 0-1 to 0-255, which renders the volume
+# invisible. Any other length is interpolated and scaled correctly.
+CLOUD_PREVIEW_OPACITY_SAMPLES = 128
+
+
+@dataclass
+class CloudSpec(VarSpec):
+    """
+    Physically based cloud rendering from hydrometeor fields.
+
+    The spec turns each species' mixing ratio (and number concentration) into
+    visible-wavelength optics with :mod:`skyvista.cloud_optics`. The Blender
+    backend writes one extinction grid per species to a VDB and renders the
+    mixture with Cycles: one scattering closure per species, summed in a
+    single volume shader. Summing is exact, because extinction and
+    scattering-weighted phase functions are additive for a mixture of
+    independent scatterers.
+
+    The PyVista renderer has no multiple scattering, so ``show()`` draws a
+    preview: a white emission-absorption volume whose per-cell opacity is the
+    Beer-Lambert value ``1 - exp(-beta * cell_size)``. Its transparency
+    matches the physical optical depth, but its shading does not.
+    """
+
+    geometry: CloudGeometry = field(default_factory=CloudGeometry)
+    appearance: CloudAppearance = field(default_factory=CloudAppearance)
+
+    def __post_init__(self):
+        if self.name is None:
+            self.name = "clouds"
+        # Filled by create_mesh() for the PyVista preview's transfer function.
+        self._preview_extinction_max: float = 0.0
+        self._preview_unit_distance: Optional[float] = None
+
+    def is_volume(self) -> bool:
+        return True
+
+    def resolve_species(self, ds: xr.Dataset) -> List["HydrometeorSpecies"]:
+        """Species to render, matched against this dataset's variable names."""
+        from .cloud_optics import resolve_cloud_species
+
+        return resolve_cloud_species(
+            ds, species=self.geometry.species, microphysics=self.geometry.microphysics
+        )
+
+    def compute_optics(
+        self, dataset_at_time: xr.Dataset, vertical_coordinate_name: str
+    ) -> List["SpeciesOptics"]:
+        """
+        Optics of every species at one time, with ``extinction_scale`` applied.
+
+        Args:
+            dataset_at_time: Model output at a single time.
+            vertical_coordinate_name: Height coordinate (meters), used only
+                when the air density falls back to the standard atmosphere.
+        """
+        from .cloud_optics import compute_cloud_optics, resolve_air_density
+
+        species = self.resolve_species(dataset_at_time)
+        air_density = resolve_air_density(
+            dataset_at_time, self.geometry.air_density, vertical_coordinate_name
+        )
+        optics_per_species = compute_cloud_optics(dataset_at_time, species, air_density)
+
+        # A deliberate, user-requested departure from physical extinction.
+        extinction_scale = self.appearance.extinction_scale
+        if extinction_scale != 1.0:
+            for optics in optics_per_species:
+                optics.extinction = optics.extinction * extinction_scale
+                optics.render_extinction = optics.render_extinction * extinction_scale
+        return optics_per_species
+
+    def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
+        """Build the preview grid carrying the total render extinction (m^-1)."""
+        from .cloud_optics import total_render_extinction
+        from .grids import resolve_coordinate
+
+        dataset_at_time = select_time(ds, time)
+        vertical_coordinate_name = resolve_coordinate(dataset_at_time, "z")
+
+        # Total extinction of the mixture: the sum over species.
+        optics_per_species = self.compute_optics(
+            dataset_at_time, vertical_coordinate_name
+        )
+        total_extinction = total_render_extinction(optics_per_species)
+        dataset_with_extinction = dataset_at_time.assign(
+            {CLOUD_EXTINCTION_VARIABLE: total_extinction}
+        )
+        grid = build_grid(
+            dataset_with_extinction,
+            varname=CLOUD_EXTINCTION_VARIABLE,
+            grid_type=self.grid_type,
+        )
+
+        # Remember the range and a typical cell size for the transfer function.
+        self._preview_extinction_max = float(np.nanmax(total_extinction.values))
+        x_min, x_max, y_min, y_max, z_min, z_max = grid.bounds
+        domain_volume = max((x_max - x_min) * (y_max - y_min) * (z_max - z_min), 0.0)
+        self._preview_unit_distance = (
+            (domain_volume / max(grid.n_points, 1)) ** (1.0 / 3.0)
+            if domain_volume > 0
+            else None
+        )
+        return grid
+
+    def get_pyvista_kwargs(self) -> Dict[str, Any]:
+        """
+        White volume with Beer-Lambert opacity over one grid cell.
+
+        VTK interprets each opacity as the opacity across
+        ``opacity_unit_distance`` and compounds it along the ray as
+        ``1 - (1 - a)**(step / unit)``. Setting
+        ``a(beta) = 1 - exp(-beta * unit)`` makes that compounding exactly
+        Beer-Lambert attenuation for every step length.
+        """
+        extinction_max = self._preview_extinction_max
+        if not np.isfinite(extinction_max) or extinction_max <= 0.0:
+            extinction_max = 1.0
+        unit_distance = self._preview_unit_distance or 1.0
+
+        # Opacity per unit distance at evenly spaced extinctions in [0, max].
+        sampled_extinction = np.linspace(
+            0.0, extinction_max, CLOUD_PREVIEW_OPACITY_SAMPLES
+        )
+        beer_lambert_opacity = 1.0 - np.exp(-sampled_extinction * unit_distance)
+
+        kwargs: Dict[str, Any] = {
+            "scalars": CLOUD_EXTINCTION_VARIABLE,
+            "cmap": ["white", "white"],
+            "clim": (0.0, extinction_max),
+            "opacity": beer_lambert_opacity,
+            "opacity_unit_distance": unit_distance,
+        }
+        kwargs.update(self.pyvista_add_kwargs)
         return kwargs

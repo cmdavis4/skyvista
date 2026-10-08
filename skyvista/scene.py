@@ -16,6 +16,7 @@ from carlee_tools import NumpyNumeric, PathLike, warn_if_not_evenly_spaced
 
 from .grids import get_grid_builder, merge_bounds_meshes
 from .varspec import (
+    CloudSpec,
     ContourSpec,
     SliceSpec,
     TrajectorySpec,
@@ -250,6 +251,52 @@ class Scene:
             clim=clim,
             show_scalar_bar=show_scalar_bar,
             mapper=mapper,
+            **kwargs,
+        )
+        return self.add(ds, spec)
+
+    def add_clouds(
+        self,
+        ds: xr.Dataset,
+        species: Optional[List[Any]] = None,
+        microphysics: Optional[str] = None,
+        air_density: Union[str, float, None] = None,
+        vertical_spacing: Optional[float] = None,
+        extinction_floor: float = 1.0e-6,
+        extinction_scale: float = 1.0,
+        **kwargs,
+    ) -> "Scene":
+        """
+        Add physically based clouds built from hydrometeor fields.
+
+        Converts mixing ratios (and number concentrations) of cloud water,
+        rain, ice species, etc. into visible-wavelength optics. The Blender
+        backend renders them with multiple scattering; ``show()`` draws a
+        Beer-Lambert preview. See :func:`skyvista.make_clouds` and
+        :mod:`skyvista.cloud_optics`.
+
+        Args:
+            ds: xarray Dataset with hydrometeor mixing ratios (kg/kg).
+            species: Explicit ``HydrometeorSpecies`` list; None uses a preset.
+            microphysics: "rams", "cm1_morrison", "generic", or None to detect.
+            air_density: Variable name, constant (kg m^-3), or None to search.
+            vertical_spacing: Uniform vertical voxel size (m) for VDB export.
+            extinction_floor: Extinction (m^-1) treated as clear air.
+            extinction_scale: Multiplier on extinction; 1.0 is physical.
+            **kwargs: Additional VarSpec kwargs.
+
+        Returns:
+            self (for method chaining)
+        """
+        from .convenience import make_clouds
+
+        spec = make_clouds(
+            species=species,
+            microphysics=microphysics,
+            air_density=air_density,
+            vertical_spacing=vertical_spacing,
+            extinction_floor=extinction_floor,
+            extinction_scale=extinction_scale,
             **kwargs,
         )
         return self.add(ds, spec)
