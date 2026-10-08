@@ -460,7 +460,8 @@ def make_cloud_material(name, material_spec):
     exceeded: 96 > 64". That count is a conservative compile-time estimate
     (32 slots reserved per volume closure). It is harmless here: the render
     does not depend on the order of the species' closures, which it would if
-    any were dropped (checked in Blender 5.0.1 with three distinct g values).
+    any were dropped (checked in Blender 5.0.1 with three and with eight
+    distinct g values).
 
     Units: the grids are in km^-1, and the shader converts them to m^-1. The
     volume object's render space is set to OBJECT, where one unit is one meter
