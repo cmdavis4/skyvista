@@ -27,11 +27,11 @@ geometric-optics limit applies:
   is ~1e-9 across 400-700 nm, so the single-scattering albedo is 1 to better
   than 1e-4 even for millimetre raindrops. Clouds are pure, *spectrally
   neutral* scatterers. Their colour comes only from the illumination.
-* **Phase functions** are strongly forward peaked. Cloud droplets use the
-  Jendersie & d'Eon (2023) Henyey-Greenstein + Draine fit to Mie theory, which
-  Cycles implements natively as its "Mie" phase function, driven per voxel by
-  the droplet diameter. Every other species is far outside that fit's 5-50 um
-  range and uses a delta-scaled Henyey-Greenstein lobe (see below).
+* **Phase functions** are strongly forward peaked. Every species uses a
+  Henyey-Greenstein lobe whose asymmetry parameter ``g`` comes from Mie
+  theory or from measured ice optics (values below). Large particles are
+  delta scaled (see below). Cloud droplets may instead use Cycles' native
+  "Mie" phase function (opt-in; see "Validation in Cycles").
 
 Size distributions
 ------------------
@@ -75,6 +75,11 @@ background with their *visual* (half) optical depth, as they do in reality.
 
 Asymmetry parameters (total, including diffraction)
 --------------------------------------------------
+* cloud droplets 0.86: Mie theory for water spheres, averaged over a gamma
+  distribution (mu = 2) and 450-650 nm. It is 0.849 at an effective diameter
+  of 10 um, 0.858 at 20 um, and 0.870 at 40 um. Droplets are not delta
+  scaled, because their diffraction lobe (``lambda / D`` ~ 1.6 deg at 20 um)
+  is wider than the solar disc and forms the visible aureole.
 * drizzle 0.88, rain 0.88: Mie theory for water spheres, averaged over a gamma
   distribution and 450-650 nm (D_eff 100 um: 0.879; 0.5-2 mm: 0.883-0.884).
 * pristine ice, snow, aggregates, graupel 0.75: the severely roughened
@@ -85,14 +90,27 @@ Asymmetry parameters (total, including diffraction)
 * hail 0.80: assumed. It lies between a clear ice sphere (0.89 from Mie
   theory) and roughened ice (0.75), since hailstones are often bubbly or lobed.
 
-Known limitation of the droplet phase function
------------------------------------------------
-The Jendersie & d'Eon fit matches the *shape* of the Mie phase function well
-(forward peak and broad side lobe). It was fitted in log space, not to the
-mean cosine, and its asymmetry parameter is ~0.015-0.02 above full Mie theory
-for effective diameters of 10-40 um. Diffuse light therefore penetrates thick
-cloud ~10-15% more easily than in reality. The direct-beam optical depth is
-unaffected.
+Validation in Cycles (Blender 5.0.1)
+------------------------------------
+The pipeline was checked against a discrete-ordinates solver (DISORT) and an
+independent Monte Carlo code for a homogeneous slab of optical depth 10,
+lit by a sun at 60 deg elevation and viewed at nadir:
+
+* isotropic scattering: Cycles is within 1.5% of DISORT, which confirms the
+  extinction units and the object-space density convention.
+* Henyey-Greenstein, g = 0.72-0.86: Cycles reflects 9-11% too little and
+  transmits correspondingly more. Energy is conserved (reflectance plus
+  transmittance is 1.000), so this is a redistribution inside Cycles'
+  volume integrator, not lost light. Delta scaling does not change it.
+* Cycles' "Mie" phase function (droplets, d = 15 um): ~20% too little
+  reflection against a Monte Carlo solution with the same phase function.
+  The Jendersie & d'Eon fit is also more forward peaked than full Mie theory
+  (g 0.864 vs 0.849 at 10 um; 0.879 vs 0.858 at 20 um).
+
+Henyey-Greenstein with the Mie-theory ``g`` is therefore the default for
+droplets: it gives the more accurate cloud brightness in Cycles. The "mie"
+phase function remains available for close-ups of sunlit cloud edges, where
+its narrow forward peak reproduces the silver lining more faithfully.
 """
 
 from __future__ import annotations
@@ -122,6 +140,11 @@ SPHERE_AREA_EXPONENT = 2.0
 # and Morrison & Grabowski (2008) use it for all unrimed non-spherical ice.
 NONSPHERICAL_ICE_AREA_COEFFICIENT = 0.2285 * 100.0**1.88 / 100.0**2
 NONSPHERICAL_ICE_AREA_EXPONENT = 1.88
+
+# Asymmetry parameter of cloud droplets from Mie theory (gamma mu = 2
+# populations, 450-650 nm): 0.849 at D_eff = 10 um, 0.858 at 20 um, 0.870 at
+# 40 um. 0.86 represents typical cloud droplets to within 0.01.
+DROPLET_ASYMMETRY_PARAMETER = 0.86
 
 # Geometric-optics limit of the extinction efficiency (the extinction paradox).
 LARGE_PARTICLE_EXTINCTION_EFFICIENCY = 2.0
@@ -203,8 +226,9 @@ class HydrometeorSpecies:
             ``number_variable`` is None or absent from the dataset.
         fixed_intercept: Constant intercept ``N0`` in m^-(4 + mu), used when
             no number concentration is available.
-        phase_function: "mie" (the Cycles water-droplet Mie fit, valid for
-            effective diameters up to ~50 um) or "henyey_greenstein".
+        phase_function: "henyey_greenstein" (default) or "mie", the Cycles
+            water-droplet Mie fit (valid for effective diameters up to ~50 um;
+            see "Validation in Cycles" in the module docstring).
         asymmetry_parameter: Total asymmetry parameter ``g`` (mean scattering
             cosine, including diffraction). Ignored for "mie".
         delta_scale_diffraction: Remove the diffraction peak from extinction
@@ -396,13 +420,14 @@ def extinction_efficiency(
     """
     Extinction efficiency ``Q_ext`` for a species.
 
-    Droplets (the "mie" species) get the Mie edge-effect correction
-    ``2 + 0.75 * (D_eff / 1 um)**(-2/3)``: about +8% at 10 um, +5% at 20 um.
-    Every other species is large enough that ``Q_ext = 2`` holds to ~1%, and
-    their non-spherical shapes would make the sphere-derived correction
-    meaningless anyway.
+    Spheres (mass exponent 3, area exponent 2) get the Mie edge-effect
+    correction ``2 + 0.75 * (D_eff / 1 um)**(-2/3)``: about +8% at 10 um, +5%
+    at 20 um, and under +0.5% for raindrops. Non-spherical ice keeps
+    ``Q_ext = 2``, since the correction was derived for spheres and those
+    particles are large enough that it would be under 2% anyway.
     """
-    if species.phase_function != "mie":
+    is_sphere = species.mass_exponent == 3.0 and species.area_exponent == 2.0
+    if not is_sphere:
         return LARGE_PARTICLE_EXTINCTION_EFFICIENCY
     effective_diameter_microns = np.maximum(effective_diameter * 1.0e6, 1.0e-3)
     return LARGE_PARTICLE_EXTINCTION_EFFICIENCY + (
@@ -540,7 +565,7 @@ def rams_hydrometeor_species(
             mass_coefficient=524.0,
             mass_exponent=3.0,
             gamma_shape=gnu_cloud - 1.0,
-            phase_function="mie",
+            asymmetry_parameter=DROPLET_ASYMMETRY_PARAMETER,
             delta_scale_diffraction=False,
             mean_diameter_bounds=(2.0e-6, 50.0e-6),
         ),
@@ -654,7 +679,7 @@ def cm1_morrison_hydrometeor_species(
             mass_coefficient=_sphere_mass_coefficient(997.0),
             mass_exponent=3.0,
             gamma_shape=droplet_gamma_shape,
-            phase_function="mie",
+            asymmetry_parameter=DROPLET_ASYMMETRY_PARAMETER,
             delta_scale_diffraction=False,
             mean_diameter_bounds=(1.0e-6, 50.0e-6),
         ),
@@ -722,7 +747,7 @@ def generic_single_moment_species() -> List[HydrometeorSpecies]:
             mass_coefficient=_sphere_mass_coefficient(WATER_DENSITY),
             mass_exponent=3.0,
             gamma_shape=4.0,
-            phase_function="mie",
+            asymmetry_parameter=DROPLET_ASYMMETRY_PARAMETER,
             delta_scale_diffraction=False,
             mean_diameter_bounds=(1.0e-6, 50.0e-6),
         ),

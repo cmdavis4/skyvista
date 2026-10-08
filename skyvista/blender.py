@@ -17,7 +17,10 @@ Carriers
   ``alembic3d`` bindings. Blender ingests these through a Mesh Sequence Cache
   modifier, which supports the changing vertex/face counts that isosurfaces
   produce every timestep.
-* Volumes are written as **VDB** sequences (handled elsewhere / later).
+* Volumes are written as **VDB** sequences: one scalar grid per frame for a
+  plain volume, or one extinction grid per hydrometeor species for a
+  physically rendered cloud (see :func:`_build_cloud_entry` and
+  :mod:`skyvista.cloud_optics`).
 
 Coloring
 --------
@@ -139,6 +142,17 @@ class BlenderRenderConfig:
             colors data-faithful; Blender's default AgX/Filmic would silently
             alter a scientific figure's colors, so "Standard" is the default.
         film_transparent: Whether the render background is transparent.
+        volume_bounces: Maximum number of volume scattering events per light
+            path. None means 128 when the scene contains clouds (enough for
+            optically thick convection to converge to within ~1%) and
+            Blender's default otherwise. Blender's own default is 0, i.e.
+            single scattering only, which renders clouds far too dark.
+        exposure: Film exposure in EV (stops). None means automatic metering
+            under the "physical_sky" world (a white Lambertian surface in full
+            sun renders at 80% of display white), and 0 otherwise.
+        denoise: Run Cycles' denoiser. It also removes the rare negative
+            pixels produced by Cycles' unbiased volume transmittance estimator
+            in thick, sunlit clouds.
     """
 
     engine: str = "CYCLES"
@@ -146,6 +160,9 @@ class BlenderRenderConfig:
     resolution: Tuple[int, int] = (1920, 1080)
     view_transform: str = "Standard"
     film_transparent: bool = False
+    volume_bounces: Optional[int] = None
+    exposure: Optional[float] = None
+    denoise: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -154,6 +171,9 @@ class BlenderRenderConfig:
             "resolution": list(self.resolution),
             "view_transform": self.view_transform,
             "film_transparent": self.film_transparent,
+            "volume_bounces": self.volume_bounces,
+            "exposure": self.exposure,
+            "denoise": self.denoise,
         }
 
 
@@ -197,7 +217,7 @@ class BlenderCameraConfig:
 # Named world/lighting looks the build script knows how to construct. Kept here
 # (rather than only on the Blender side) so callers get validated names and so
 # the set is documented in one place.
-WORLD_PRESETS = ("sky", "studio", "dark", "white")
+WORLD_PRESETS = ("sky", "physical_sky", "studio", "dark", "white")
 
 
 @dataclass
@@ -206,15 +226,23 @@ class BlenderWorldConfig:
     World background and key-light configuration.
 
     A "preset" picks the overall look; the sun_* / background_strength knobs
-    then tune it. All presets place a single key Sun lamp aimed from
-    (sun_elevation_deg, sun_azimuth_deg) so shadows are consistent regardless of
-    the background, and the "sky" preset additionally points Blender's Nishita
-    physical-sky sun in that same direction.
+    then tune it. Every preset except "physical_sky" places a single key Sun
+    lamp aimed from (sun_elevation_deg, sun_azimuth_deg) so shadows are
+    consistent regardless of the background. The "sky" preset additionally
+    points Blender's Nishita physical-sky sun in that same direction, and
+    "physical_sky" uses that sky sun as the only sun.
 
     Attributes:
         preset: One of :data:`WORLD_PRESETS`:
             - "sky": Nishita physical daytime sky, with the key sun aligned to
               the sky's sun. Best default for outdoor atmospheric scenes.
+            - "physical_sky": the same physical sky, but radiometrically
+              faithful: the sun is the sky texture's own sun disc (so the
+              direct/diffuse ratio is the model's, ~84/16 at 35 deg), no
+              separate lamp, no damping of sky light, and automatic exposure.
+              The preset for physically rendered clouds (``add_clouds``).
+              ``sun_strength`` is ignored; ``background_strength`` scales sun
+              and sky together.
             - "studio": neutral mid-gray environment + soft key sun. Isolates the
               figure with no distracting background (product-shot look).
             - "dark": near-black background + sun. Flatters glowing volumes and
@@ -223,13 +251,20 @@ class BlenderWorldConfig:
         sun_elevation_deg: Sun height above the horizon in degrees (0 = on the
             horizon, 90 = straight overhead). Drives both the key Sun lamp and,
             for the "sky" preset, the Nishita sun.
-        sun_azimuth_deg: Sun compass direction in degrees, measured CCW from +x
-            about +z (0 = light coming from +x, 90 = from +y).
+        sun_azimuth_deg: Direction of the sun in degrees, measured CCW from +x
+            about +z (0 = sun toward +x, so light travels toward -x; 90 = sun
+            toward +y).
         sun_strength: Irradiance of the key Sun lamp (Blender "Strength"/energy).
         background_strength: Brightness of the *camera-visible* background (the
             sky or backdrop). The background's contribution to *lighting* is
             damped separately per preset so a bright sky/backdrop can't wash the
             baked scientific colors to white; see the build script's setup_world.
+        ground_albedo: Albedo of a matte, spectrally neutral ground plane, or
+            None for no ground. Ground-reflected light brightens cloud bases
+            and the ground receives the clouds' shadows; 0.15 is typical of
+            vegetated land in the visible.
+        ground_height: Height of the ground plane in data units (default 0,
+            the model surface).
     """
 
     preset: str = "sky"
@@ -237,6 +272,14 @@ class BlenderWorldConfig:
     sun_azimuth_deg: float = 40.0
     sun_strength: float = 2.0
     background_strength: float = 1.0
+    ground_albedo: Optional[float] = None
+    ground_height: float = 0.0
+
+    def __post_init__(self):
+        if self.preset not in WORLD_PRESETS:
+            raise ValueError(
+                f"Unknown world preset {self.preset!r}; choose from {WORLD_PRESETS}."
+            )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -245,6 +288,8 @@ class BlenderWorldConfig:
             "sun_azimuth_deg": self.sun_azimuth_deg,
             "sun_strength": self.sun_strength,
             "background_strength": self.background_strength,
+            "ground_albedo": self.ground_albedo,
+            "ground_height": self.ground_height,
         }
 
 
@@ -269,6 +314,23 @@ class BlenderExportConfig:
     world: BlenderWorldConfig = field(default_factory=BlenderWorldConfig)
     fps: float = 24.0
     frame_start: int = 1
+
+    @classmethod
+    def for_clouds(cls, **overrides) -> "BlenderExportConfig":
+        """
+        Defaults for a physically rendered cloud scene.
+
+        Uses the "physical_sky" world (radiometrically consistent sun and sky,
+        automatic exposure) over a ground of albedo 0.15. The render keeps 128
+        volume bounces and denoising. Pass any field as a keyword to override
+        it, e.g. ``for_clouds(fps=12)``.
+        """
+        config = cls(
+            world=BlenderWorldConfig(preset="physical_sky", ground_albedo=0.15),
+        )
+        for field_name, value in overrides.items():
+            setattr(config, field_name, value)
+        return config
 
 
 # =============================================================================
@@ -742,10 +804,12 @@ def _build_object_entry(
     entry plus the updated running spatial bounds.
 
     Surface-mesh specs (contour, slice, vector glyphs, trajectory tubes) go to
-    Alembic; volume specs go to a VDB sequence.
+    Alembic; volume and cloud specs go to a VDB sequence.
     """
-    from .varspec import VolumeSpec
+    from .varspec import CloudSpec, VolumeSpec
 
+    if isinstance(spec, CloudSpec):
+        return _build_cloud_entry(spec, dataset, times, data_subdir, running_bounds)
     if isinstance(spec, VolumeSpec):
         return _build_volume_entry(spec, dataset, times, data_subdir, running_bounds)
     return _build_mesh_entry(spec, dataset, times, data_subdir, fps, running_bounds)
@@ -1102,6 +1166,430 @@ def _build_volume_entry(
 
 
 # =============================================================================
+# Cloud export (multi-species VDB)
+# =============================================================================
+# Extinction grids are stored in km^-1 rather than m^-1. Blender loads VDB
+# grids at half precision by default, whose normal range starts at 6e-5. Thin
+# cloud edges (1e-6 to 1e-4 m^-1) would land in its subnormal range and lose
+# precision; in km^-1 they are 1e-3 to 0.1, comfortably representable. The
+# build script converts back to m^-1 in the shader.
+CLOUD_EXTINCTION_GRID_UNITS = "1/km"
+METERS_PER_KILOMETER = 1000.0
+
+# Prefixes of the per-species grids inside each cloud VDB file.
+CLOUD_EXTINCTION_GRID_PREFIX = "extinction_"
+CLOUD_MIE_DIAMETER_GRID_PREFIX = "mie_diameter_"
+
+# Above this many uniform vertical levels the requested spacing is coarsened,
+# so a finely stretched grid cannot silently produce a multi-gigabyte VDB.
+MAX_UNIFORM_VERTICAL_LEVELS = 2000
+
+
+def choose_uniform_vertical_spacing(
+    level_heights: np.ndarray, cloudy_level_mask: np.ndarray
+) -> float:
+    """
+    Pick a uniform vertical voxel size that preserves the cloudy layers.
+
+    VDB voxels are uniform, but model levels are usually stretched (finer near
+    the surface). Stretching the voxels to the mean spacing would misplace and
+    distort clouds. Instead we resample onto uniform levels, at the finest
+    native spacing found among levels that hold condensate (and their
+    immediate neighbours). The cloudy part of the column therefore keeps its
+    full native resolution, while clear layers far above or below do not force
+    a needlessly fine grid.
+
+    Args:
+        level_heights: Native level heights (m), increasing.
+        cloudy_level_mask: True for levels containing any condensate.
+
+    Returns:
+        The uniform spacing in meters.
+    """
+    level_spacings = np.diff(level_heights)
+    # A spacing touches a cloudy layer if either of its two levels is cloudy.
+    spacing_touches_cloud = cloudy_level_mask[:-1] | cloudy_level_mask[1:]
+    if spacing_touches_cloud.any():
+        return float(level_spacings[spacing_touches_cloud].min())
+    return float(level_spacings.min())
+
+
+def interpolate_to_levels(
+    data_array, vertical_dimension: str, native_heights: np.ndarray, target_heights
+):
+    """
+    Linearly interpolate a DataArray along its vertical dimension.
+
+    Implemented with numpy index arithmetic (no scipy): for every target level
+    find the bracketing native levels and blend them with linear weights.
+    Targets outside the native range are clamped to the end levels. Variables
+    without the vertical dimension are returned unchanged.
+    """
+    import xarray as xr
+
+    if vertical_dimension not in data_array.dims:
+        return data_array
+
+    # Index of the native level at or below each target (clamped into range).
+    upper_index = np.searchsorted(native_heights, target_heights, side="right")
+    upper_index = np.clip(upper_index, 1, len(native_heights) - 1)
+    lower_index = upper_index - 1
+
+    # Linear weight of the upper level, clamped so targets outside the native
+    # range take the nearest end value instead of extrapolating.
+    lower_heights = native_heights[lower_index]
+    upper_heights = native_heights[upper_index]
+    upper_weight = np.clip(
+        (target_heights - lower_heights) / (upper_heights - lower_heights), 0.0, 1.0
+    )
+
+    # Blend the two bracketing levels. Coordinates along the vertical are
+    # dropped first: indexing with repeated level indices duplicates them,
+    # which would stop xarray from aligning the two halves of the blend.
+    vertical_coordinates = [
+        name
+        for name, coordinate in data_array.coords.items()
+        if vertical_dimension in coordinate.dims
+    ]
+    lower_values = data_array.isel({vertical_dimension: lower_index}).drop_vars(
+        vertical_coordinates
+    )
+    upper_values = data_array.isel({vertical_dimension: upper_index}).drop_vars(
+        vertical_coordinates
+    )
+    weight_array = xr.DataArray(upper_weight, dims=[vertical_dimension])
+    blended = lower_values * (1.0 - weight_array) + upper_values * weight_array
+    return blended.assign_coords({vertical_dimension: target_heights})
+
+
+def write_multigrid_vdb(
+    file_path: Path,
+    grids: Dict[str, Tuple[np.ndarray, float]],
+    transform_matrix: List[List[float]],
+) -> None:
+    """
+    Write several named float grids, sharing one transform, to a single VDB.
+
+    Each grid is copied from a dense (nx, ny, nz) array. Voxels equal to the
+    grid's *background* value become inactive and are pruned into tiles, so
+    clear air costs almost nothing on disk or in Blender's memory. The
+    background is 0 for extinction grids. For Mie diameter grids it is a
+    typical cloud value, so that interpolation at a cloud's edge blends toward
+    a realistic diameter instead of toward 0 um.
+
+    Args:
+        file_path: Destination ``.vdb`` file.
+        grids: Grid name -> (dense array in x, y, z order, background value).
+        transform_matrix: 4x4 index->world matrix (OpenVDB row-vector form).
+    """
+    openvdb = _require_openvdb()
+    vdb_grids = []
+    for grid_name, (dense_array, background_value) in grids.items():
+        grid = openvdb.FloatGrid(float(background_value))
+        grid.copyFromArray(np.ascontiguousarray(dense_array, dtype=np.float32))
+        # Collapse uniform (background) regions into tiles.
+        grid.prune()
+        grid.name = grid_name
+        grid.transform = openvdb.createLinearTransform(matrix=transform_matrix)
+        vdb_grids.append(grid)
+    openvdb.write(str(file_path), grids=vdb_grids)
+
+
+def _cloud_footprint(
+    spec, dataset, times: List[Any], coordinate_names: Dict[str, str]
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Where any hydrometeor exists at any render time, as 1-D masks per axis.
+
+    Used to crop the exported volume to the cloudy region (plus a margin), so a
+    large domain with one storm does not produce mostly-empty VDBs.
+
+    Returns:
+        (x_mask, y_mask, z_mask): booleans along each native axis.
+    """
+    from .grid_utils import select_time
+
+    x_name = coordinate_names["x"]
+    y_name = coordinate_names["y"]
+    z_name = coordinate_names["z"]
+    species = spec.resolve_species(dataset)
+
+    x_mask = np.zeros(dataset.sizes[x_name], dtype=bool)
+    y_mask = np.zeros(dataset.sizes[y_name], dtype=bool)
+    z_mask = np.zeros(dataset.sizes[z_name], dtype=bool)
+    for time in times:
+        dataset_at_time = select_time(dataset, time)
+        # Total condensate at this time; any positive value marks the cell.
+        total_condensate = None
+        for one_species in species:
+            mixing_ratio = (
+                dataset_at_time[one_species.mixing_ratio_variable]
+                .clip(min=0.0)
+                .fillna(0.0)
+            )
+            total_condensate = (
+                mixing_ratio
+                if total_condensate is None
+                else total_condensate + mixing_ratio
+            )
+        has_condensate = (total_condensate > 0.0).transpose(x_name, y_name, z_name)
+        has_condensate = np.asarray(has_condensate.values)
+        # Project the 3-D occupancy onto each axis.
+        x_mask |= has_condensate.any(axis=(1, 2))
+        y_mask |= has_condensate.any(axis=(0, 2))
+        z_mask |= has_condensate.any(axis=(0, 1))
+    return x_mask, y_mask, z_mask
+
+
+def _mask_to_slice(axis_mask: np.ndarray, margin: int = 1) -> slice:
+    """Index slice covering the True entries of a mask, padded by ``margin``."""
+    true_indices = np.nonzero(axis_mask)[0]
+    if true_indices.size == 0:
+        return slice(0, len(axis_mask))
+    first_index = max(int(true_indices[0]) - margin, 0)
+    last_index = min(int(true_indices[-1]) + margin, len(axis_mask) - 1)
+    return slice(first_index, last_index + 1)
+
+
+def _build_cloud_entry(
+    spec: "VarSpec",
+    dataset,
+    times: List[Any],
+    data_subdir: Path,
+    running_bounds: Optional[np.ndarray],
+) -> Tuple[Dict[str, Any], Optional[np.ndarray]]:
+    """
+    Export a cloud spec to a multi-grid VDB sequence and its manifest entry.
+
+    Steps:
+
+    1. Find the cloudy footprint over all times and crop to it (one-cell
+       margin), so the VDB transform is identical for every frame.
+    2. Resample the cropped column onto uniform vertical levels
+       (:func:`choose_uniform_vertical_spacing`), interpolating the *inputs*
+       (mixing ratios, numbers, air density) so the optics are computed
+       consistently on the final grid.
+    3. Compute every species' optics (:mod:`skyvista.cloud_optics`) and write
+       one VDB per frame holding ``extinction_<species>`` grids in km^-1,
+       plus ``mie_diameter_<species>`` (um) for species using the Mie phase.
+    4. Describe each species' grid and phase function in the manifest; the
+       build script turns that into one Volume Scatter closure per species,
+       summed in a single shader.
+    """
+    import warnings
+
+    from .grid_utils import select_time
+    from .grids import resolve_coordinates
+
+    geometry = spec.geometry
+
+    # ---- Require a rectilinear grid (1-D coordinate axes)
+    coordinate_names = resolve_coordinates(dataset, ["x", "y", "z"])
+    x_name = coordinate_names["x"]
+    y_name = coordinate_names["y"]
+    z_name = coordinate_names["z"]
+    for coordinate_name in (x_name, y_name, z_name):
+        if coordinate_name not in dataset.coords or dataset[coordinate_name].ndim != 1:
+            raise NotImplementedError(
+                "Cloud VDB export requires a rectilinear grid with 1-D x/y/z"
+                f" coordinates; '{coordinate_name}' is missing or"
+                " multi-dimensional. Resample to a rectilinear grid first."
+            )
+
+    # ---- Variables the optics need: mixing ratios, numbers, air density
+    species = spec.resolve_species(dataset)
+    needed_variables = []
+    for one_species in species:
+        needed_variables.append(one_species.mixing_ratio_variable)
+        if one_species.number_variable is not None:
+            needed_variables.append(one_species.number_variable)
+    air_density_setting = geometry.air_density
+    if air_density_setting is None:
+        from .cloud_optics import AIR_DENSITY_VARIABLE_CANDIDATES, _find_variable
+
+        for candidate in AIR_DENSITY_VARIABLE_CANDIDATES:
+            found_name = _find_variable(dataset, candidate)
+            if found_name is not None:
+                air_density_setting = found_name
+                break
+    if isinstance(air_density_setting, str):
+        needed_variables.append(air_density_setting)
+    cloud_dataset = dataset[sorted(set(needed_variables))]
+
+    # ---- 1. Crop to the cloudy footprint over all times
+    x_mask, y_mask, z_mask = _cloud_footprint(
+        spec, cloud_dataset, times, coordinate_names
+    )
+    if not z_mask.any():
+        warnings.warn(
+            f"Cloud spec {spec.name!r}: no hydrometeors at any render time; "
+            "exporting empty volumes.",
+            stacklevel=2,
+        )
+    x_slice = _mask_to_slice(x_mask)
+    y_slice = _mask_to_slice(y_mask)
+    z_slice = _mask_to_slice(z_mask)
+    cropped_dataset = cloud_dataset.isel(
+        {x_name: x_slice, y_name: y_slice, z_name: z_slice}
+    )
+    x_coordinates = cropped_dataset[x_name].values.astype(float)
+    y_coordinates = cropped_dataset[y_name].values.astype(float)
+    native_heights = cropped_dataset[z_name].values.astype(float)
+
+    # ---- 2. Uniform vertical levels covering the cropped column
+    if geometry.vertical_spacing is not None:
+        vertical_spacing = float(geometry.vertical_spacing)
+    else:
+        vertical_spacing = choose_uniform_vertical_spacing(
+            native_heights, z_mask[z_slice]
+        )
+    column_depth = native_heights[-1] - native_heights[0]
+    if column_depth / vertical_spacing + 1 > MAX_UNIFORM_VERTICAL_LEVELS:
+        coarsened_spacing = column_depth / (MAX_UNIFORM_VERTICAL_LEVELS - 1)
+        warnings.warn(
+            f"Cloud spec {spec.name!r}: a vertical spacing of "
+            f"{vertical_spacing:.1f} m needs more than "
+            f"{MAX_UNIFORM_VERTICAL_LEVELS} levels; using {coarsened_spacing:.1f} m."
+            " Pass vertical_spacing=... to choose explicitly.",
+            stacklevel=2,
+        )
+        vertical_spacing = coarsened_spacing
+    n_uniform_levels = int(np.floor(column_depth / vertical_spacing)) + 1
+    uniform_heights = native_heights[0] + vertical_spacing * np.arange(n_uniform_levels)
+
+    # ---- Index->world transform: voxel sizes on the diagonal, origin last row
+    voxel_size_x = _axis_voxel_size(x_coordinates)
+    voxel_size_y = _axis_voxel_size(y_coordinates)
+    transform_matrix = [
+        [voxel_size_x, 0.0, 0.0, 0.0],
+        [0.0, voxel_size_y, 0.0, 0.0],
+        [0.0, 0.0, vertical_spacing, 0.0],
+        [
+            float(x_coordinates[0]),
+            float(y_coordinates[0]),
+            float(uniform_heights[0]),
+            1.0,
+        ],
+    ]
+
+    # ---- 3. Optics per frame -> one multi-grid VDB per frame
+    object_subdir = data_subdir / spec.name
+    object_subdir.mkdir(parents=True, exist_ok=True)
+    extinction_floor_per_km = geometry.extinction_floor * METERS_PER_KILOMETER
+    max_extinction_per_species: Dict[str, float] = {s.name: 0.0 for s in species}
+    mie_background_per_species: Dict[str, float] = {}
+    for frame_index, time in enumerate(times):
+        dataset_at_time = select_time(cropped_dataset, time)
+        # Resample every input variable onto the uniform levels.
+        resampled_dataset = dataset_at_time.map(
+            lambda data_array: interpolate_to_levels(
+                data_array, z_name, native_heights, uniform_heights
+            )
+        ).assign_coords({z_name: uniform_heights})
+        optics_per_species = spec.compute_optics(resampled_dataset, z_name)
+
+        frame_grids: Dict[str, Tuple[np.ndarray, float]] = {}
+        for optics in optics_per_species:
+            species_name = optics.species.name
+            # Render extinction in km^-1, (x, y, z) order, clear air set to 0.
+            extinction_per_km = (
+                optics.render_extinction.transpose(x_name, y_name, z_name).values
+                * METERS_PER_KILOMETER
+            )
+            extinction_per_km = np.where(
+                extinction_per_km >= extinction_floor_per_km, extinction_per_km, 0.0
+            )
+            frame_grids[CLOUD_EXTINCTION_GRID_PREFIX + species_name] = (
+                extinction_per_km,
+                0.0,
+            )
+            max_extinction_per_species[species_name] = max(
+                max_extinction_per_species[species_name],
+                float(extinction_per_km.max()),
+            )
+
+            # Mie species also carry the per-voxel droplet diameter (um).
+            if optics.mie_fit_diameter_microns is not None:
+                mie_diameter = optics.mie_fit_diameter_microns.transpose(
+                    x_name, y_name, z_name
+                ).values
+                is_cloudy = extinction_per_km > 0.0
+                # Background: the median cloudy diameter of the first frame
+                # with cloud, held fixed so every frame shares it.
+                if species_name not in mie_background_per_species and is_cloudy.any():
+                    mie_background_per_species[species_name] = float(
+                        np.median(mie_diameter[is_cloudy])
+                    )
+                background_diameter = mie_background_per_species.get(species_name, 15.0)
+                frame_grids[CLOUD_MIE_DIAMETER_GRID_PREFIX + species_name] = (
+                    np.where(is_cloudy, mie_diameter, background_diameter),
+                    background_diameter,
+                )
+
+        frame_path = object_subdir / f"{spec.name}_{frame_index + 1:04d}.vdb"
+        write_multigrid_vdb(frame_path, frame_grids, transform_matrix)
+
+    # ---- Fold the volume into the scene bounds. Vertically we span from the
+    # model's lowest level, so the default origin shift floors the figure at
+    # the model surface rather than at the cloud base.
+    volume_corner_points = np.array(
+        [
+            [x_coordinates.min(), y_coordinates.min(), float(dataset[z_name].min())],
+            [x_coordinates.max(), y_coordinates.max(), float(uniform_heights.max())],
+        ],
+        dtype=float,
+    )
+    running_bounds = _accumulate_bounds(running_bounds, volume_corner_points)
+
+    # ---- 4. Manifest: one entry per species that is ever present
+    from .cloud_optics import species_summary
+
+    species_entries = []
+    for optics in optics_per_species:
+        one_species = optics.species
+        if max_extinction_per_species[one_species.name] <= 0.0:
+            continue
+        species_entry: Dict[str, Any] = {
+            "name": one_species.name,
+            "extinction_grid": CLOUD_EXTINCTION_GRID_PREFIX + one_species.name,
+            "max_extinction": max_extinction_per_species[one_species.name],
+            "phase_function": one_species.phase_function,
+            "anisotropy": optics.render_anisotropy,
+            "delta_scaled": one_species.delta_scale_diffraction,
+            "microphysics": species_summary(one_species),
+        }
+        if one_species.phase_function == "mie":
+            species_entry["mie_diameter_grid"] = (
+                CLOUD_MIE_DIAMETER_GRID_PREFIX + one_species.name
+            )
+        species_entries.append(species_entry)
+
+    material = spec.appearance.to_blender_material()
+    material.update(
+        {
+            "extinction_grid_units": CLOUD_EXTINCTION_GRID_UNITS,
+            # Grid values below this (in grid units) are clear air.
+            "clipping": extinction_floor_per_km,
+            "species": species_entries,
+        }
+    )
+    object_entry = {
+        "name": spec.name,
+        "spec_type": "cloud",
+        "geometry": {
+            "carrier": "vdb_sequence",
+            "path_pattern": f"data/{spec.name}/{spec.name}_####.vdb",
+            "grid_name": (
+                species_entries[0]["extinction_grid"] if species_entries else None
+            ),
+            "vertical_spacing": vertical_spacing,
+        },
+        "material": material,
+    }
+    return object_entry, running_bounds
+
+
+# =============================================================================
 # Camera
 # =============================================================================
 def _follow_positions(
@@ -1282,7 +1770,17 @@ def export_scene_to_blender(
     Returns:
         The bundle directory path.
     """
-    config = config or BlenderExportConfig()
+    if config is None:
+        from .varspec import CloudSpec
+
+        # Physically rendered clouds need the radiometric world and many volume
+        # bounces; every other scene keeps the general-purpose defaults.
+        scene_has_clouds = any(isinstance(spec, CloudSpec) for _, spec in scene._specs)
+        config = (
+            BlenderExportConfig.for_clouds()
+            if scene_has_clouds
+            else BlenderExportConfig()
+        )
     bundle_dir = Path(path)
     data_dir = bundle_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)

@@ -17,6 +17,9 @@ It reads the bundle's ``scene.json`` and assembles a ``.blend``:
 * VDB volume sequences with a Principled Volume shader whose density and color
   are driven by the named grid through a color ramp rebuilt from the bundle's
   colormap LUT;
+* physically rendered clouds: a VDB sequence with one extinction grid per
+  hydrometeor species, rendered by one Volume Scatter closure per species
+  summed in a single shader (see ``make_cloud_material``);
 * a camera (from the manifest, or a sensible default framing the data);
 * render settings (engine, samples, resolution, Standard view transform).
 
@@ -74,8 +77,27 @@ def reset_scene():
             collection.remove(datablock)
 
 
-def configure_render(scene, manifest):
-    """Apply engine, samples, resolution, color management, and frame range."""
+# Volume bounces used for scenes with clouds when the manifest leaves it unset.
+# On a synthetic cumulus of optical depth ~300, the sunlit side's brightness
+# was within ~1% of its 256-bounce value at 64 bounces; 128 adds margin for
+# deeper convection.
+CLOUD_DEFAULT_VOLUME_BOUNCES = 128
+
+
+def configure_render(scene, manifest, scene_has_clouds=False):
+    """
+    Apply engine, samples, resolution, color management, and frame range.
+
+    For scenes with physically rendered clouds this also sets the settings
+    the radiative transfer depends on:
+
+    * ``volume_bounces``: Blender's default of 0 means single scattering only,
+      which renders thick clouds grey-brown instead of white.
+    * no indirect clamp: clamping removes energy from the multiply scattered
+      light that makes up most of a cloud's brightness.
+    * the unbiased (null-scattering) volume integrator, whose transmittance
+      estimates stay accurate however optically thick a voxel is.
+    """
     render_config = manifest.get("render", {})
     engine = render_config.get("engine", "CYCLES")
     try:
@@ -96,6 +118,24 @@ def configure_render(scene, manifest):
     scene.render.resolution_x = int(resolution[0])
     scene.render.resolution_y = int(resolution[1])
     scene.render.film_transparent = bool(render_config.get("film_transparent", True))
+
+    if scene.render.engine == "CYCLES":
+        # Denoising also removes the rare negative pixels that the unbiased
+        # volume transmittance estimator produces in thick, sunlit clouds.
+        scene.cycles.use_denoising = bool(render_config.get("denoise", True))
+        volume_bounces = render_config.get("volume_bounces")
+        if volume_bounces is None and scene_has_clouds:
+            volume_bounces = CLOUD_DEFAULT_VOLUME_BOUNCES
+        if volume_bounces is not None:
+            scene.cycles.volume_bounces = int(volume_bounces)
+            # The total bounce limit caps every other limit, so raise it too.
+            scene.cycles.max_bounces = max(
+                scene.cycles.max_bounces, int(volume_bounces) + 8
+            )
+        if scene_has_clouds:
+            scene.cycles.sample_clamp_indirect = 0.0
+            if hasattr(scene.cycles, "volume_biased"):
+                scene.cycles.volume_biased = False
 
     # Data-faithful color: Standard view transform (not AgX/Filmic).
     try:
@@ -376,6 +416,137 @@ def make_volume_material(name, material_spec, bundle_dir):
     return material
 
 
+def _set_volume_scatter_phase(scatter_node, phase_function):
+    """
+    Select a Volume Scatter phase function, returning False if unavailable.
+
+    Blender 4.x added the phase enum (with "MIE"); older versions only have
+    Henyey-Greenstein. Blender 5.0 also *hides* the inputs belonging to the
+    other phase functions, so the phase must be set before the matching input
+    ("Anisotropy" or "Diameter") is looked up.
+    """
+    identifier = {"mie": "MIE", "henyey_greenstein": "HENYEY_GREENSTEIN"}[
+        phase_function
+    ]
+    if not hasattr(scatter_node, "phase"):
+        return phase_function == "henyey_greenstein"
+    available = {
+        item.identifier for item in scatter_node.bl_rna.properties["phase"].enum_items
+    }
+    if identifier not in available:
+        return False
+    scatter_node.phase = identifier
+    return True
+
+
+def make_cloud_material(name, material_spec):
+    """
+    Build the physically based cloud shader from a manifest cloud material.
+
+    Every species contributes one Volume Scatter closure::
+
+        Attribute(extinction_<species>, km^-1)
+          -> x (0.001 * extinction_scale)        [km^-1 -> m^-1]
+          -> Volume Scatter(Density, white, phase of that species)
+
+    and the closures are summed with Add Shader nodes. Summing is exact: for a
+    mixture of independent scatterers the extinction coefficients add, and the
+    effective phase function is the scattering-weighted mean of the species'
+    phase functions, which is what Cycles samples from a sum of closures. No
+    absorption closure is added because water and ice absorb negligibly in
+    the visible (single-scattering albedo 1 to better than 1e-4).
+
+    With three or more species Cycles prints "Maximum number of closures
+    exceeded: 96 > 64". That count is a conservative compile-time estimate
+    (32 slots reserved per volume closure). It is harmless here: the render
+    does not depend on the order of the species' closures, which it would if
+    any were dropped (checked in Blender 5.0.1 with three distinct g values).
+
+    Units: the grids are in km^-1, and the shader converts them to m^-1. The
+    volume object's render space is set to OBJECT, where one unit is one meter
+    of the VDB's physical transform. Cycles then integrates optical depth in
+    meters, whatever scale or vertical exaggeration the scene transform
+    applies.
+    """
+    material = bpy.data.materials.new(name=f"{name}_mat")
+    material.use_nodes = True
+    node_tree = material.node_tree
+    nodes = node_tree.nodes
+    links = node_tree.links
+
+    # Start from just the output node.
+    for node in list(nodes):
+        if node.type != "OUTPUT_MATERIAL":
+            nodes.remove(node)
+    output_node = nodes.get("Material Output") or nodes.new("ShaderNodeOutputMaterial")
+    output_node.location = (600, 0)
+
+    # Grid units -> m^-1, times any deliberate user scaling.
+    units_to_per_meter = (
+        1.0e-3 if material_spec.get("extinction_grid_units") == "1/km" else 1.0
+    )
+    density_factor = units_to_per_meter * float(
+        material_spec.get("extinction_scale", 1.0)
+    )
+
+    accumulated_shader_socket = None
+    for species_index, species in enumerate(material_spec.get("species", [])):
+        row_y = -300 * species_index
+
+        # Extinction grid of this species, converted to m^-1.
+        extinction_attribute = nodes.new("ShaderNodeAttribute")
+        extinction_attribute.attribute_name = species["extinction_grid"]
+        extinction_attribute.label = f"{species['name']} extinction (km^-1)"
+        extinction_attribute.location = (-800, row_y)
+        to_per_meter = nodes.new("ShaderNodeMath")
+        to_per_meter.operation = "MULTIPLY"
+        to_per_meter.label = f"{species['name']}: km^-1 -> m^-1"
+        to_per_meter.inputs[1].default_value = density_factor
+        to_per_meter.location = (-600, row_y)
+        links.new(extinction_attribute.outputs["Fac"], to_per_meter.inputs[0])
+
+        # Pure, spectrally neutral scattering with this species' phase function.
+        scatter = nodes.new("ShaderNodeVolumeScatter")
+        scatter.label = f"{species['name']} scattering"
+        scatter.location = (-350, row_y)
+        scatter.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+        links.new(to_per_meter.outputs[0], scatter.inputs["Density"])
+
+        wants_mie = species.get("phase_function") == "mie"
+        if wants_mie and _set_volume_scatter_phase(scatter, "mie"):
+            # Per-voxel droplet diameter (um) drives the Mie fit.
+            diameter_attribute = nodes.new("ShaderNodeAttribute")
+            diameter_attribute.attribute_name = species["mie_diameter_grid"]
+            diameter_attribute.label = f"{species['name']} Mie diameter (um)"
+            diameter_attribute.location = (-600, row_y - 150)
+            links.new(diameter_attribute.outputs["Fac"], scatter.inputs["Diameter"])
+        else:
+            if wants_mie:
+                print(
+                    f"  [WARN] {name}: no Mie phase in this Blender; "
+                    f"{species['name']} falls back to Henyey-Greenstein g=0.86"
+                )
+            _set_volume_scatter_phase(scatter, "henyey_greenstein")
+            anisotropy = species.get("anisotropy")
+            scatter.inputs["Anisotropy"].default_value = float(
+                0.86 if anisotropy is None else anisotropy
+            )
+
+        # Sum this species' closure into the mixture.
+        if accumulated_shader_socket is None:
+            accumulated_shader_socket = scatter.outputs[0]
+        else:
+            add_shader = nodes.new("ShaderNodeAddShader")
+            add_shader.location = (0, row_y)
+            links.new(accumulated_shader_socket, add_shader.inputs[0])
+            links.new(scatter.outputs[0], add_shader.inputs[1])
+            accumulated_shader_socket = add_shader.outputs[0]
+
+    if accumulated_shader_socket is not None:
+        links.new(accumulated_shader_socket, output_node.inputs["Volume"])
+    return material
+
+
 # ---------------------------------------------------------------------------
 # Object import
 # ---------------------------------------------------------------------------
@@ -452,9 +623,19 @@ def import_volume_object(bundle_dir, object_spec, root_empty, frame_start, n_fra
             pass
 
     parent_keep_local(volume_object, root_empty)
-    material = make_volume_material(
-        object_spec["name"], object_spec["material"], bundle_dir
-    )
+    material_spec = object_spec["material"]
+    if material_spec.get("type") == "cloud":
+        material = make_cloud_material(object_spec["name"], material_spec)
+        render_settings = volume_data.render
+        # Density per object unit (= per meter of the VDB transform), so the
+        # optical depth is physical whatever the scene scale/exaggeration.
+        if hasattr(render_settings, "space"):
+            render_settings.space = "OBJECT"
+        # Grid values below the export's extinction floor are clear air.
+        if hasattr(render_settings, "clipping"):
+            render_settings.clipping = float(material_spec.get("clipping", 0.0))
+    else:
+        material = make_volume_material(object_spec["name"], material_spec, bundle_dir)
     volume_object.data.materials.clear()
     volume_object.data.materials.append(material)
     return [volume_object]
@@ -526,28 +707,78 @@ FLAT_WORLD_COLORS = {
 # dark ("dark", "studio") keep the full contribution (1.0).
 WORLD_LIGHT_FACTORS = {
     "sky": 0.30,
+    "physical_sky": 1.0,
     "white": 0.15,
     "studio": 1.0,
     "dark": 1.0,
 }
 
+# Radiance of a white Lambertian horizontal plane lit by the physical sky
+# (sun disc on, default air/aerosol/ozone densities and altitude, sun
+# intensity 1), as (sun elevation in degrees, linear radiance). Measured by
+# rendering such a plane in Cycles, Blender 5.0.1, MULTIPLE_SCATTERING sky.
+# The sky's diffuse share of this is 16% at 35 deg, close to clear-sky values.
+PHYSICAL_SKY_WHITE_PLANE_RADIANCE = (
+    (5.0, 2.707),
+    (10.0, 6.484),
+    (20.0, 14.934),
+    (35.0, 27.114),
+    (50.0, 37.391),
+    (70.0, 46.711),
+    (90.0, 50.052),
+)
+
+# Automatic exposure maps that white plane to this linear value: 80% of
+# display white, leaving headroom for forward-scattering cloud edges.
+AUTO_EXPOSURE_WHITE_TARGET = 0.8
+
+
+def physical_sky_white_plane_radiance(sun_elevation_deg):
+    """Interpolate PHYSICAL_SKY_WHITE_PLANE_RADIANCE (clamped to its range)."""
+    table = PHYSICAL_SKY_WHITE_PLANE_RADIANCE
+    elevation = min(max(float(sun_elevation_deg), table[0][0]), table[-1][0])
+    for (low_elevation, low_value), (high_elevation, high_value) in zip(
+        table[:-1], table[1:], strict=True
+    ):
+        if elevation <= high_elevation:
+            fraction = (elevation - low_elevation) / (high_elevation - low_elevation)
+            return low_value + fraction * (high_value - low_value)
+    return table[-1][1]
+
+
+def auto_exposure_ev(sun_elevation_deg, background_strength):
+    """
+    Exposure (EV) a camera metering a white card in full sun would choose.
+
+    The physical sky is radiometrically scaled, so a sunlit white surface has
+    a linear radiance of ~27 at 35 deg sun elevation, far above display white.
+    We expose so that a white Lambertian surface lying flat in full sun and
+    skylight renders at AUTO_EXPOSURE_WHITE_TARGET. Everything else keeps its
+    physical brightness relative to that card.
+    """
+    white_radiance = physical_sky_white_plane_radiance(sun_elevation_deg) * max(
+        float(background_strength), 1.0e-6
+    )
+    return math.log2(AUTO_EXPOSURE_WHITE_TARGET / white_radiance)
+
 
 def aim_sun(sun_object, sun_elevation_deg, sun_azimuth_deg):
     """
-    Orient a Sun lamp so its light arrives from a given sky direction.
+    Orient a Sun lamp so the sun sits at (elevation, azimuth) in the sky.
 
-    A Blender Sun emits along its local -Z axis. At zero rotation that points
-    straight down (sun at the zenith). Tilting about X by (90 - elevation) drops
-    the apparent sun to the requested height above the horizon; rotating about Z
-    sets the compass azimuth. Euler order 'XYZ' applies the X tilt first, then
-    the Z azimuth, which is exactly what we want.
+    Azimuth is measured CCW from +x about +z, toward the sun. A Blender Sun
+    emits along its local -Z axis. Tilting about X by (90 - elevation) and
+    then rotating about Z by psi makes the light *come from* the direction
+    (sin psi cos e, -cos psi cos e, sin e). That equals the requested
+    (cos A cos e, sin A cos e, sin e) when psi = A + 90 deg. Euler order 'XYZ'
+    applies the X tilt first, then the Z rotation.
     """
     elevation = math.radians(sun_elevation_deg)
-    azimuth = math.radians(sun_azimuth_deg)
-    sun_object.rotation_euler = (math.pi / 2.0 - elevation, 0.0, azimuth)
+    lamp_rotation_about_z = math.radians(sun_azimuth_deg) + math.pi / 2.0
+    sun_object.rotation_euler = (math.pi / 2.0 - elevation, 0.0, lamp_rotation_about_z)
 
 
-def make_sky_texture(nodes, sun_elevation_deg, sun_azimuth_deg):
+def make_sky_texture(nodes, sun_elevation_deg, sun_azimuth_deg, sun_disc=False):
     """
     Create a physically-based Sky Texture node aimed at the given sun direction.
 
@@ -558,9 +789,17 @@ def make_sky_texture(nodes, sun_elevation_deg, sun_azimuth_deg):
     attributes (not input sockets); set them defensively so a renamed attribute
     in some Blender version can't abort the whole build.
 
-    The sky's own sun disc is disabled: the crisp key light comes from the
-    explicit, matched Sun lamp, while the sky still contributes realistic blue
-    skylight. This avoids a blown-out sun disc and doubled directional light.
+    By default the sky's own sun disc is disabled: the crisp key light comes
+    from the explicit, matched Sun lamp, while the sky still contributes
+    realistic blue skylight. With ``sun_disc=True`` (the "physical_sky"
+    preset) the sky's sun is the only sun, which keeps the sun/sky radiance
+    ratio of the physical model. Cycles importance-samples that disc directly.
+
+    Azimuth convention: the sky's sun lies toward
+    (sin r cos e, cos r cos e, sin e) for rotation r, so r = 0 puts it toward
+    +y and r increases clockwise seen from above. This was established by
+    rendering a pole's shadow at four azimuths. Our azimuth A is measured CCW
+    from +x toward the sun, so r = 90 deg - A (wrapped into [0, 360)).
     """
     sky = nodes.new("ShaderNodeTexSky")
     available_sky_types = {
@@ -573,9 +812,9 @@ def make_sky_texture(nodes, sun_elevation_deg, sun_azimuth_deg):
     if hasattr(sky, "sun_elevation"):
         sky.sun_elevation = math.radians(sun_elevation_deg)
     if hasattr(sky, "sun_rotation"):
-        sky.sun_rotation = math.radians(sun_azimuth_deg)
+        sky.sun_rotation = math.radians((90.0 - sun_azimuth_deg) % 360.0)
     if hasattr(sky, "sun_disc"):
-        sky.sun_disc = False
+        sky.sun_disc = sun_disc
     return sky
 
 
@@ -588,6 +827,9 @@ def setup_world(scene, manifest):
                   sky's sun direction, and the sky's own sun disc is disabled so
                   the crisp shadows come from the (single) Sun lamp while the sky
                   still provides realistic blue ambient light.
+      - "physical_sky": the same sky with its own sun disc as the only sun and
+                  undamped sky light, so sun and sky keep the physical model's
+                  radiance ratio; exposure is set by ``configure_exposure``.
       - "studio": neutral mid-gray environment + soft key sun.
       - "dark":   near-black background + sun (flatters glowing volumes).
       - "white":  pure white background + sun (clean print look).
@@ -624,9 +866,15 @@ def setup_world(scene, manifest):
 
     world_output = nodes.new("ShaderNodeOutputWorld")
 
-    # Background color source: physical sky for "sky", else a constant color.
-    if preset == "sky":
-        sky = make_sky_texture(nodes, sun_elevation_deg, sun_azimuth_deg)
+    # Background color source: physical sky for the sky presets, else a
+    # constant color. Only "physical_sky" keeps the sky's own sun disc.
+    if preset in ("sky", "physical_sky"):
+        sky = make_sky_texture(
+            nodes,
+            sun_elevation_deg,
+            sun_azimuth_deg,
+            sun_disc=(preset == "physical_sky"),
+        )
         color_output = sky.outputs["Color"]
         constant_color = None
     else:
@@ -658,6 +906,10 @@ def setup_world(scene, manifest):
     links.new(background_seen_by_camera.outputs["Background"], mix_shader.inputs[2])
     links.new(mix_shader.outputs["Shader"], world_output.inputs["Surface"])
 
+    # The physical sky's sun disc *is* the sun; a lamp would double it.
+    if preset == "physical_sky":
+        return
+
     # Key sun: one directional lamp, aimed from the configured sky direction so
     # shadows are consistent regardless of which world preset is active.
     sun_data = bpy.data.lights.new("skyvista_sun", type="SUN")
@@ -665,6 +917,87 @@ def setup_world(scene, manifest):
     sun_object = bpy.data.objects.new("skyvista_sun", sun_data)
     aim_sun(sun_object, sun_elevation_deg, sun_azimuth_deg)
     scene.collection.objects.link(sun_object)
+
+
+def setup_ground(scene, manifest, transform, root_empty):
+    """
+    Add a matte, spectrally neutral ground plane if the manifest asks for one.
+
+    The plane sits at ``world.ground_height`` (data units) under the scene
+    transform and extends 1000 km in every direction, far enough that its edge
+    never shows against the sky. It is parented to the root Empty like the
+    data, so it follows any transform edit. A Diffuse BSDF is exactly
+    Lambertian, so the albedo means what it says: the fraction of light
+    reflected, which then brightens cloud bases from below.
+    """
+    world_block = manifest.get("world", {})
+    ground_albedo = world_block.get("ground_albedo")
+    if ground_albedo is None:
+        return None
+
+    # A square plane in data units (meters), parented under the root Empty.
+    half_width_data_units = 1.0e6
+    ground_height = float(world_block.get("ground_height", 0.0))
+    mesh = bpy.data.meshes.new("skyvista_ground")
+    corners = [
+        (-half_width_data_units, -half_width_data_units, ground_height),
+        (half_width_data_units, -half_width_data_units, ground_height),
+        (half_width_data_units, half_width_data_units, ground_height),
+        (-half_width_data_units, half_width_data_units, ground_height),
+    ]
+    mesh.from_pydata(corners, [], [(0, 1, 2, 3)])
+    ground_object = bpy.data.objects.new("skyvista_ground", mesh)
+    scene.collection.objects.link(ground_object)
+    # Keep the ground in data units: apply the root transform, minus any
+    # horizontal origin shift (the plane is centered on the data anyway).
+    parent_keep_local(ground_object, root_empty)
+    origin_shift = transform.get("origin_shift") or [0.0, 0.0, 0.0]
+    ground_object.location = (origin_shift[0], origin_shift[1], 0.0)
+
+    # Lambertian, grey material with the requested albedo (linear).
+    material = bpy.data.materials.new("skyvista_ground_mat")
+    material.use_nodes = True
+    nodes = material.node_tree.nodes
+    for node in list(nodes):
+        if node.type != "OUTPUT_MATERIAL":
+            nodes.remove(node)
+    diffuse = nodes.new("ShaderNodeBsdfDiffuse")
+    albedo = float(ground_albedo)
+    diffuse.inputs["Color"].default_value = (albedo, albedo, albedo, 1.0)
+    material.node_tree.links.new(
+        diffuse.outputs[0], nodes["Material Output"].inputs["Surface"]
+    )
+    mesh.materials.append(material)
+
+    # Let the camera see the ground out to its edge, not just the default
+    # 1000-unit clip distance (the plane is 2000 km across).
+    if scene.camera is not None:
+        plane_reach = (
+            2.0 * half_width_data_units * float(transform.get("scale", 1.0e-3))
+        )
+        scene.camera.data.clip_end = max(scene.camera.data.clip_end, plane_reach)
+    return ground_object
+
+
+def configure_exposure(scene, manifest):
+    """
+    Set the film exposure: explicit from the manifest, else auto-metered.
+
+    Auto-metering applies only to the "physical_sky" world, whose radiances
+    are physical and far above display range. Other presets are tuned for an
+    exposure of 0 and keep it.
+    """
+    render_config = manifest.get("render", {})
+    world_block = manifest.get("world", {})
+    exposure = render_config.get("exposure")
+    if exposure is None and world_block.get("preset") == "physical_sky":
+        exposure = auto_exposure_ev(
+            world_block.get("sun_elevation_deg", 35.0),
+            world_block.get("background_strength", 1.0),
+        )
+    if exposure is not None:
+        scene.view_settings.exposure = float(exposure)
+        print(f"  exposure: {float(exposure):+.2f} EV")
 
 
 # ---------------------------------------------------------------------------
@@ -897,7 +1230,11 @@ def main():
 
     print(f"Building {bundle_dir.name} in Blender {bpy.app.version_string} ...")
     reset_scene()
-    configure_render(scene, manifest)
+    scene_has_clouds = any(
+        object_spec.get("material", {}).get("type") == "cloud"
+        for object_spec in manifest.get("objects", [])
+    )
+    configure_render(scene, manifest, scene_has_clouds=scene_has_clouds)
 
     transform = manifest.get("transform", {})
     root_empty = create_root_empty(scene, transform)
@@ -931,6 +1268,8 @@ def main():
 
     setup_camera(scene, manifest, transform, built_objects)
     setup_world(scene, manifest)
+    setup_ground(scene, manifest, transform, root_empty)
+    configure_exposure(scene, manifest)
 
     # A bloom pass is warranted if any surface object opted into it via its
     # shader preset (the "glow" look). Bloom is a full-frame effect, so one

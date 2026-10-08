@@ -16,7 +16,6 @@ from carlee_tools import NumpyNumeric, PathLike, warn_if_not_evenly_spaced
 
 from .grids import get_grid_builder, merge_bounds_meshes
 from .varspec import (
-    CloudSpec,
     ContourSpec,
     SliceSpec,
     TrajectorySpec,
