@@ -274,6 +274,23 @@ class BlenderWorldConfig:
             vegetated land in the visible.
         ground_height: Height of the ground plane in data units (default 0,
             the model surface).
+        aerial_perspective: Fill the clear air around the scene with a
+            physical haze, so distant objects fade toward the sky color as in
+            a real view across tens of kilometres. Two scatterers, both
+            decaying exponentially with height above the ground: air molecules
+            (Rayleigh phase, scattering coefficients for 680/550/440 nm, scale
+            height 8 km) and aerosol (Henyey-Greenstein phase). The haze fills
+            a box around the data and the camera only. Meant for the
+            "physical_sky" preset; requires data in meters.
+        visibility_km: Meteorological visibility at the ground, which sets the
+            aerosol extinction by Koschmieder's relation, beta = 3.912 / V
+            (minus the molecular part). 50 km is a clean continental day.
+        aerosol_scale_height_m: E-folding height of the aerosol (roughly the
+            boundary-layer depth).
+        aerosol_asymmetry: Henyey-Greenstein g of the aerosol (~0.7 for
+            continental aerosol in the visible).
+        aerosol_single_scattering_albedo: Scattered fraction of the aerosol
+            extinction; the rest is absorbed (~0.9 continental).
     """
 
     preset: str = "sky"
@@ -283,6 +300,11 @@ class BlenderWorldConfig:
     background_strength: float = 1.0
     ground_albedo: Optional[float] = None
     ground_height: float = 0.0
+    aerial_perspective: bool = False
+    visibility_km: float = 50.0
+    aerosol_scale_height_m: float = 1500.0
+    aerosol_asymmetry: float = 0.7
+    aerosol_single_scattering_albedo: float = 0.9
 
     def __post_init__(self):
         if self.preset not in WORLD_PRESETS:
@@ -299,6 +321,11 @@ class BlenderWorldConfig:
             "background_strength": self.background_strength,
             "ground_albedo": self.ground_albedo,
             "ground_height": self.ground_height,
+            "aerial_perspective": self.aerial_perspective,
+            "visibility_km": self.visibility_km,
+            "aerosol_scale_height_m": self.aerosol_scale_height_m,
+            "aerosol_asymmetry": self.aerosol_asymmetry,
+            "aerosol_single_scattering_albedo": self.aerosol_single_scattering_albedo,
         }
 
 
@@ -2391,6 +2418,13 @@ def export_scene_to_blender(
             scene,
         ),
         "objects": object_entries,
+        # Data-space bounding box of everything exported, [[min], [max]];
+        # the build script sizes scene-wide elements (the haze box) from it.
+        "bounds": (
+            [[float(value) for value in corner] for corner in running_bounds]
+            if running_bounds is not None
+            else None
+        ),
         "annotations": {
             "title": scene.title,
             "show_grid": scene.show_grid,

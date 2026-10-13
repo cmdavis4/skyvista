@@ -403,3 +403,23 @@ def test_world_preset_is_validated():
 
     with pytest.raises(ValueError, match="Unknown world preset"):
         BlenderWorldConfig(preset="sunset")
+
+
+def test_aerial_perspective_settings_reach_the_manifest(tmp_path):
+    """The haze settings and the scene bounds that size the haze box."""
+    x = np.linspace(-1000.0, 1000.0, 5)
+    dataset = xr.Dataset(
+        {name: (("x", "y", "z"), np.ones((5, 5, 5))) for name in ("U", "V", "W")},
+        coords={"x": x, "y": x, "z": np.linspace(0.0, 2000.0, 5)},
+    )
+    config = sv.BlenderExportConfig()
+    config.world.aerial_perspective = True
+    config.world.visibility_km = 80.0
+    # Vector glyphs export without Alembic or OpenVDB.
+    sv.Scene().add_vectors(dataset, "wind", u="U", v="V", w="W").to_blender(
+        tmp_path / "bundle", config=config
+    )
+    manifest = json.loads((tmp_path / "bundle" / "scene.json").read_text())
+    assert manifest["world"]["aerial_perspective"] is True
+    assert manifest["world"]["visibility_km"] == 80.0
+    assert manifest["bounds"] is not None

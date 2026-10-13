@@ -1434,7 +1434,9 @@ def aim_sun(sun_object, sun_elevation_deg, sun_azimuth_deg):
     sun_object.rotation_euler = (math.pi / 2.0 - elevation, 0.0, lamp_rotation_about_z)
 
 
-def make_sky_texture(nodes, sun_elevation_deg, sun_azimuth_deg, sun_disc=False):
+def make_sky_texture(
+    nodes, sun_elevation_deg, sun_azimuth_deg, sun_disc=False, altitude_m=0.0
+):
     """
     Create a physically-based Sky Texture node aimed at the given sun direction.
 
@@ -1456,6 +1458,11 @@ def make_sky_texture(nodes, sun_elevation_deg, sun_azimuth_deg, sun_disc=False):
     +y and r increases clockwise seen from above. This was established by
     rendering a pole's shadow at four azimuths. Our azimuth A is measured CCW
     from +x toward the sun, so r = 90 deg - A (wrapped into [0, 360)).
+
+    ``altitude_m`` places the sky model's observer above the ground. With
+    aerial perspective on, it is the top of the haze box: the sky model then
+    supplies only the atmosphere above the box, and the box supplies the air
+    inside it, instead of both supplying the low atmosphere.
     """
     sky = nodes.new("ShaderNodeTexSky")
     available_sky_types = {
@@ -1471,7 +1478,25 @@ def make_sky_texture(nodes, sun_elevation_deg, sun_azimuth_deg, sun_disc=False):
         sky.sun_rotation = math.radians((90.0 - sun_azimuth_deg) % 360.0)
     if hasattr(sky, "sun_disc"):
         sky.sun_disc = sun_disc
+    if altitude_m and hasattr(sky, "altitude"):
+        sky.altitude = float(altitude_m)
     return sky
+
+
+def haze_box_top_altitude_m(manifest):
+    """Height (m above the ground) of the haze box top, or 0 with no haze."""
+    world_block = manifest.get("world", {})
+    if not world_block.get("aerial_perspective"):
+        return 0.0
+    transform = manifest.get("transform", {})
+    box_bounds = _haze_box_bounds(manifest, transform)
+    if box_bounds is None:
+        return 0.0
+    scale = float(transform.get("scale", 1.0e-3))
+    z_exaggeration = float(transform.get("z_exaggeration", 1.0))
+    origin_z = float((transform.get("origin_shift") or [0.0, 0.0, 0.0])[2])
+    top_data_z = box_bounds[1].z / (scale * z_exaggeration) + origin_z
+    return max(top_data_z - float(world_block.get("ground_height", 0.0)), 0.0)
 
 
 def setup_world(scene, manifest):
@@ -1530,6 +1555,7 @@ def setup_world(scene, manifest):
             sun_elevation_deg,
             sun_azimuth_deg,
             sun_disc=(preset == "physical_sky"),
+            altitude_m=haze_box_top_altitude_m(manifest),
         )
         color_output = sky.outputs["Color"]
         constant_color = None
@@ -1636,6 +1662,213 @@ def setup_ground(scene, manifest, transform, root_empty):
         )
         scene.camera.data.clip_end = max(scene.camera.data.clip_end, plane_reach)
     return ground_object
+
+
+# Molecular (Rayleigh) scattering coefficients of air at sea level, m^-1, for
+# the red / green / blue channels taken as 680 / 550 / 440 nm (Bruneton &
+# Neyret 2008), and the e-folding height of air density.
+RAYLEIGH_SCATTERING_SEA_LEVEL_RGB = (5.8e-6, 13.5e-6, 33.1e-6)
+RAYLEIGH_SCALE_HEIGHT_M = 8000.0
+# Koschmieder: visibility V (m) where contrast falls to 2%, beta = -ln(0.02)/V.
+KOSCHMIEDER_CONSTANT = 3.912
+# Haze box margin beyond the data and camera, as a fraction of its span.
+HAZE_BOX_MARGIN_FRACTION = 0.1
+# Minimum horizontal half-width of the haze box (m). Wide enough that sky rays
+# leave through the top, where the sky model (observer at the box top) takes
+# over; rays leaving through the sides would miss the low atmosphere beyond.
+HAZE_BOX_MIN_HALF_WIDTH_M = 300000.0
+
+
+def _haze_box_bounds(manifest, transform):
+    """
+    Blender-space (min, max) corners of the box the haze fills.
+
+    The box encloses the data bounds and every camera position, plus a margin,
+    from the ground to above the higher of the data top and the camera, and
+    is at least HAZE_BOX_MIN_HALF_WIDTH_M wide each way. The physical sky is
+    computed for an observer at the box top (see ``haze_box_top_altitude_m``),
+    so the box carries the air below that height and the sky model the air
+    above it. The width makes nearly every sky ray leave through the top,
+    where that split is exact.
+    """
+    data_bounds = manifest.get("bounds")
+    camera_keyframes = (manifest.get("camera") or {}).get("keyframes", [])
+    corner_points = []
+    if data_bounds:
+        corner_points += [transform_point(transform, corner) for corner in data_bounds]
+    corner_points += [
+        transform_point(transform, keyframe["location"])
+        for keyframe in camera_keyframes
+    ]
+    if not corner_points:
+        return None
+    minimum = Vector([min(point[axis] for point in corner_points) for axis in range(3)])
+    maximum = Vector([max(point[axis] for point in corner_points) for axis in range(3)])
+    margin = (maximum - minimum) * HAZE_BOX_MARGIN_FRACTION
+    ground = transform_point(
+        transform,
+        (0.0, 0.0, float(manifest.get("world", {}).get("ground_height", 0.0))),
+    )
+    minimum = Vector((minimum.x - margin.x, minimum.y - margin.y, ground.z))
+    maximum = Vector((maximum.x + margin.x, maximum.y + margin.y, maximum.z + margin.z))
+    # Widen horizontally around the centre to the minimum half-width.
+    min_half_width = HAZE_BOX_MIN_HALF_WIDTH_M * float(transform.get("scale", 1.0e-3))
+    for axis in (0, 1):
+        center = (minimum[axis] + maximum[axis]) / 2
+        half_width = max((maximum[axis] - minimum[axis]) / 2, min_half_width)
+        minimum[axis] = center - half_width
+        maximum[axis] = center + half_width
+    return minimum, maximum
+
+
+def setup_aerial_perspective(scene, manifest, transform):
+    """
+    Fill the clear air with physical haze: Rayleigh molecules plus aerosol.
+
+    A box mesh around the data and camera carries a volume shader whose
+    coefficients decay exponentially with height above the ground::
+
+        molecules: Volume Scatter(RAYLEIGH phase),
+                   sigma_rgb = RAYLEIGH_SCATTERING_SEA_LEVEL_RGB * exp(-h / 8 km)
+        aerosol:   Volume Scatter(HG, g) + Volume Absorption,
+                   beta = (3.912 / V - sigma_550) * exp(-h / H_aerosol),
+                   split by the single-scattering albedo
+
+    Cycles measures a mesh volume's density per Blender unit, and the box is
+    not parented to the scene root, so coefficients in m^-1 are divided by the
+    scene scale (Blender units per meter). The height in meters comes from the
+    shading position through the inverse of the scene transform.
+    """
+    world_block = manifest.get("world", {})
+    if not world_block.get("aerial_perspective"):
+        return None
+    box_bounds = _haze_box_bounds(manifest, transform)
+    if box_bounds is None:
+        print("  [WARN] aerial perspective skipped: no bounds or camera")
+        return None
+    minimum, maximum = box_bounds
+
+    # ---- The box, in Blender space (identity transform).
+    bpy.ops.mesh.primitive_cube_add(size=1.0)
+    haze_box = bpy.context.active_object
+    haze_box.name = "skyvista_haze"
+    haze_box.location = (minimum + maximum) / 2
+    haze_box.scale = maximum - minimum
+
+    # ---- Coefficients, per Blender unit.
+    scale = float(transform.get("scale", 1.0e-3))
+    z_exaggeration = float(transform.get("z_exaggeration", 1.0))
+    origin_z = float((transform.get("origin_shift") or [0.0, 0.0, 0.0])[2])
+    ground_height = float(world_block.get("ground_height", 0.0))
+    meters_to_blender = 1.0 / scale
+    rayleigh_rgb = RAYLEIGH_SCATTERING_SEA_LEVEL_RGB
+    rayleigh_max = max(rayleigh_rgb)
+    visibility_m = float(world_block.get("visibility_km", 50.0)) * 1000.0
+    aerosol_extinction = max(KOSCHMIEDER_CONSTANT / visibility_m - rayleigh_rgb[1], 0.0)
+    single_scattering_albedo = float(
+        world_block.get("aerosol_single_scattering_albedo", 0.9)
+    )
+
+    material = bpy.data.materials.new("skyvista_haze_mat")
+    material.use_nodes = True
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    for node in list(nodes):
+        if node.type != "OUTPUT_MATERIAL":
+            nodes.remove(node)
+    output_node = nodes.get("Material Output")
+
+    def math_node(operation, value=None, location=(0, 0)):
+        node = nodes.new("ShaderNodeMath")
+        node.operation = operation
+        node.location = location
+        if value is not None:
+            node.inputs[1].default_value = value
+        return node
+
+    # Height above ground (m) from the world-space shading position:
+    # z_data = z_blender / (scale * z_exaggeration) + origin_z.
+    geometry = nodes.new("ShaderNodeNewGeometry")
+    geometry.location = (-1200, 0)
+    separate = nodes.new("ShaderNodeSeparateXYZ")
+    separate.location = (-1000, 0)
+    links.new(geometry.outputs["Position"], separate.inputs[0])
+    to_meters = math_node("MULTIPLY", 1.0 / (scale * z_exaggeration), (-800, 0))
+    links.new(separate.outputs["Z"], to_meters.inputs[0])
+    above_ground = math_node("ADD", origin_z - ground_height, (-600, 0))
+    links.new(to_meters.outputs[0], above_ground.inputs[0])
+
+    def density_profile(scale_height_m, surface_coefficient, location):
+        """surface_coefficient * exp(-h / H), per Blender unit."""
+        ratio = math_node("DIVIDE", -scale_height_m, location)
+        links.new(above_ground.outputs[0], ratio.inputs[0])
+        decay = math_node("EXPONENT", None, (location[0] + 200, location[1]))
+        links.new(ratio.outputs[0], decay.inputs[0])
+        coefficient = math_node(
+            "MULTIPLY",
+            surface_coefficient * meters_to_blender,
+            (location[0] + 400, location[1]),
+        )
+        links.new(decay.outputs[0], coefficient.inputs[0])
+        return coefficient.outputs[0]
+
+    # ---- Molecules: spectral scattering with the Rayleigh phase function.
+    rayleigh = nodes.new("ShaderNodeVolumeScatter")
+    rayleigh.location = (0, 250)
+    rayleigh.phase = "RAYLEIGH"
+    rayleigh.inputs["Color"].default_value = (
+        *(coefficient / rayleigh_max for coefficient in rayleigh_rgb),
+        1.0,
+    )
+    links.new(
+        density_profile(RAYLEIGH_SCALE_HEIGHT_M, rayleigh_max, (-500, 250)),
+        rayleigh.inputs["Density"],
+    )
+
+    # ---- Aerosol: grey scattering (HG) plus grey absorption.
+    aerosol_scale_height = float(world_block.get("aerosol_scale_height_m", 1500.0))
+    aerosol_scatter = nodes.new("ShaderNodeVolumeScatter")
+    aerosol_scatter.location = (0, -50)
+    aerosol_scatter.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+    aerosol_scatter.inputs["Anisotropy"].default_value = float(
+        world_block.get("aerosol_asymmetry", 0.7)
+    )
+    links.new(
+        density_profile(
+            aerosol_scale_height,
+            aerosol_extinction * single_scattering_albedo,
+            (-500, -50),
+        ),
+        aerosol_scatter.inputs["Density"],
+    )
+    aerosol_absorption = nodes.new("ShaderNodeVolumeAbsorption")
+    aerosol_absorption.location = (0, -300)
+    # Black: every channel absorbed at the full Density.
+    aerosol_absorption.inputs["Color"].default_value = (0.0, 0.0, 0.0, 1.0)
+    links.new(
+        density_profile(
+            aerosol_scale_height,
+            aerosol_extinction * (1.0 - single_scattering_albedo),
+            (-500, -300),
+        ),
+        aerosol_absorption.inputs["Density"],
+    )
+
+    add_scatterers = nodes.new("ShaderNodeAddShader")
+    add_scatterers.location = (250, 100)
+    links.new(rayleigh.outputs[0], add_scatterers.inputs[0])
+    links.new(aerosol_scatter.outputs[0], add_scatterers.inputs[1])
+    add_absorption = nodes.new("ShaderNodeAddShader")
+    add_absorption.location = (450, 0)
+    links.new(add_scatterers.outputs[0], add_absorption.inputs[0])
+    links.new(aerosol_absorption.outputs[0], add_absorption.inputs[1])
+    links.new(add_absorption.outputs[0], output_node.inputs["Volume"])
+    haze_box.data.materials.append(material)
+    print(
+        f"  aerial perspective: visibility {visibility_m / 1000:g} km, "
+        f"aerosol beta {aerosol_extinction * 1000:.3f} km^-1 at the ground"
+    )
+    return haze_box
 
 
 def configure_exposure(scene, manifest):
@@ -1940,6 +2173,7 @@ def main():
     setup_camera(scene, manifest, transform, built_objects)
     setup_world(scene, manifest)
     setup_ground(scene, manifest, transform, root_empty)
+    setup_aerial_perspective(scene, manifest, transform)
     configure_exposure(scene, manifest)
     apply_exposure_relative_emission(scene)
 
