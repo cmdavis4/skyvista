@@ -299,6 +299,28 @@ class TestCloudExport:
     def _require_openvdb(self):
         pytest.importorskip("openvdb")
 
+    def test_extinction_scale_is_applied_once_by_the_shader(
+        self, rams_like_dataset, tmp_path
+    ):
+        """The VDB keeps physical extinction; only the shader applies the scale."""
+
+        def exported_cloud_material(bundle_name, **cloud_kwargs):
+            scene = sv.Scene().add_clouds(rams_like_dataset, **cloud_kwargs)
+            scene.to_blender(tmp_path / bundle_name)
+            manifest = json.loads((tmp_path / bundle_name / "scene.json").read_text())
+            return manifest["objects"][0]["material"]
+
+        physical = exported_cloud_material("physical")
+        thinned = exported_cloud_material("thinned", extinction_scale=0.03)
+        assert thinned["extinction_scale"] == pytest.approx(0.03)
+        # Same grid maxima: the grids were not pre-multiplied by the scale.
+        for physical_species, thinned_species in zip(
+            physical["species"], thinned["species"], strict=True
+        ):
+            assert thinned_species["max_extinction"] == pytest.approx(
+                physical_species["max_extinction"]
+            )
+
     def test_bundle_has_cloud_material_and_grids(self, rams_like_dataset, tmp_path):
         import openvdb
 

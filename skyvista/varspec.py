@@ -858,15 +858,23 @@ class CloudSpec(VarSpec):
         )
 
     def compute_optics(
-        self, dataset_at_time: xr.Dataset, vertical_coordinate_name: str
+        self,
+        dataset_at_time: xr.Dataset,
+        vertical_coordinate_name: str,
+        apply_extinction_scale: bool = True,
     ) -> List["SpeciesOptics"]:
         """
-        Optics of every species at one time, with ``extinction_scale`` applied.
+        Optics of every species at one time, by default with ``extinction_scale``.
 
         Args:
             dataset_at_time: Model output at a single time.
             vertical_coordinate_name: Height coordinate (meters), used only
                 when the air density falls back to the standard atmosphere.
+            apply_extinction_scale: Multiply the extinctions by the
+                appearance's ``extinction_scale``. The PyVista preview wants
+                this. The Blender export does not: it writes physical
+                extinction to the VDB and lets the shader apply the scale, so
+                applying it here too would scale the cloud twice.
         """
         from .cloud_optics import compute_cloud_optics, resolve_air_density
 
@@ -878,7 +886,7 @@ class CloudSpec(VarSpec):
 
         # A deliberate, user-requested departure from physical extinction.
         extinction_scale = self.appearance.extinction_scale
-        if extinction_scale != 1.0:
+        if apply_extinction_scale and extinction_scale != 1.0:
             for optics in optics_per_species:
                 optics.extinction = optics.extinction * extinction_scale
                 optics.render_extinction = optics.render_extinction * extinction_scale

@@ -315,6 +315,10 @@ class BlenderExportConfig:
         fps: Frames per second the animation advertises; also the rate at which
             Alembic samples are spaced in time.
         frame_start: First Blender frame number.
+        overlay_colorbars: Composite each colormapped object's colorbar onto
+            the render. False leaves the render clean (the colorbar PNGs are
+            still written to ``assets/colorbars/``), for figures that draw
+            their own legend.
     """
 
     transform: BlenderTransform = field(default_factory=BlenderTransform)
@@ -323,6 +327,7 @@ class BlenderExportConfig:
     world: BlenderWorldConfig = field(default_factory=BlenderWorldConfig)
     fps: float = 24.0
     frame_start: int = 1
+    overlay_colorbars: bool = True
 
     @classmethod
     def for_clouds(cls, **overrides) -> "BlenderExportConfig":
@@ -1771,7 +1776,10 @@ def _build_cloud_entry(
                 data_array, z_name, native_heights, uniform_heights
             )
         ).assign_coords({z_name: uniform_heights})
-        optics_per_species = spec.compute_optics(resampled_dataset, z_name)
+        # Physical extinction: the shader applies any extinction_scale, once.
+        optics_per_species = spec.compute_optics(
+            resampled_dataset, z_name, apply_extinction_scale=False
+        )
 
         frame_grids: Dict[str, Tuple[np.ndarray, float]] = {}
         for optics in optics_per_species:
@@ -2192,6 +2200,7 @@ def export_scene_to_blender(
             "show_grid": scene.show_grid,
             "background": scene.background,
             "colorbars": colorbar_annotations,
+            "overlay_colorbars": config.overlay_colorbars,
         },
     }
 
