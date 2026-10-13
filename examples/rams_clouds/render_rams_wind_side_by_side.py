@@ -1,7 +1,8 @@
 """
 Render a RAMS storm twice, side by side: the physically based cloud, and the
-same view with the cloud thinned and the 3-D wind drawn as arrows on a
-vertical plane through the storm core.
+same view with the 3-D wind drawn as arrows on a vertical plane through the
+storm core. The cloud in the arrow panel is either thinned (default) or, with
+``--cutaway``, cut open along the arrow plane.
 
 Example (from the repository root, in the pixi ``blender`` environment)::
 
@@ -22,6 +23,18 @@ The arrows are instanced in Blender with geometry nodes from exported points
 (``Scene.add_vectors``), not baked meshes. Each arrow is the full 3-D wind at
 its point, centred from RAMS's staggered grid, so it can point out of the
 plane it sits on.
+
+Two presentation choices:
+
+* Cutaway (``--cutaway``): the cloud on the camera side of the arrow plane
+  (y below it) is removed, and the arrows are drawn ``--arrow-offset`` meters
+  toward the camera, so arrows whose wind points into the cloud are not
+  swallowed by the cut face. The remaining half keeps its physical optics.
+* Clutter filter (both modes): an arrow is dropped when its vertical motion
+  is weak (``|w| < --weak-w``) and it is farther than
+  ``--near-cloud-distance`` from any cloud (3-D distance, counting the
+  cut-away half too). Weak flow in clear air far from the storm carries
+  little information and crowds the figure.
 """
 
 import argparse
@@ -32,6 +45,7 @@ import numpy as np
 from cloud_render_config import add_render_arguments, make_cloud_export_config
 from PIL import Image, ImageDraw, ImageFont
 from rams_lite_loader import load_rams_lite_hydrometeors, load_rams_lite_winds
+from scipy import ndimage
 
 import skyvista as sv
 
@@ -40,12 +54,19 @@ PANEL_DIVIDER_WIDTH = 6
 # Font sizes of the panel titles and of the smaller labels (px).
 TITLE_FONT_SIZE = 34
 LABEL_FONT_SIZE = 26
-# Arrow colormap: diverging, white at w = 0 so weak vertical motion still
-# stands out against the blue sky and the dark ground.
-ARROW_COLORMAP = "RdBu_r"
+# Arrow colormap over a thinned cloud: diverging, white at w = 0 so weak
+# vertical motion still stands out against the blue sky and the dark ground.
+THINNED_ARROW_COLORMAP = "RdBu_r"
+# Arrow colormap over a cut face: the face is bright white, so the centre is
+# mid-grey instead (blue -> grey -> red, the end colours of RdBu). Hue gives
+# the sign of w and saturation its strength.
+CUTAWAY_ARROW_COLORMAP = "skyvista_blue_grey_red"
+CUTAWAY_ARROW_COLORMAP_COLORS = ("#2166ac", "#808080", "#b2182b")
 # Horizontal colorbar drawn in the lower right of the arrow panel (px).
 COLORBAR_WIDTH, COLORBAR_HEIGHT = 420, 26
 COLORBAR_MARGIN_RIGHT, COLORBAR_MARGIN_BOTTOM = 40, 110
+# RAMS hydrometeor mixing ratios that count as "cloud" for the clutter filter.
+HYDROMETEOR_MIXING_RATIOS = ("RCP", "RDP", "RRP", "RPP", "RSP", "RAP", "RGP", "RHP")
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -93,6 +114,35 @@ def parse_arguments() -> argparse.Namespace:
         default=0.03,
         help="Factor on cloud extinction in the arrow panel, so arrows inside show.",
     )
+    parser.add_argument(
+        "--cutaway",
+        action="store_true",
+        help="Cut the cloud open along the arrow plane instead of thinning it.",
+    )
+    parser.add_argument(
+        "--arrow-offset",
+        type=float,
+        default=300.0,
+        help="With --cutaway, draw the arrows this far (m) toward the camera (-y).",
+    )
+    parser.add_argument(
+        "--weak-w",
+        type=float,
+        default=2.0,
+        help="|w| (m/s) below which an arrow far from cloud is dropped.",
+    )
+    parser.add_argument(
+        "--near-cloud-distance",
+        type=float,
+        default=1000.0,
+        help="Arrows within this distance (m) of cloud are always kept.",
+    )
+    parser.add_argument(
+        "--cloud-mixing-ratio",
+        type=float,
+        default=1.0e-5,
+        help="Total hydrometeor mixing ratio (kg/kg) above which a cell is cloud.",
+    )
     add_render_arguments(parser)
     return parser.parse_args()
 
@@ -102,6 +152,46 @@ def strongest_updraft_y(winds) -> float:
     flat_index = int(np.nanargmax(winds["W"].values))
     _, y_index, _ = np.unravel_index(flat_index, winds["W"].shape)
     return float(winds["y"].values[y_index])
+
+
+def distance_to_cloud_on_plane(
+    clouds, plane_y_index: int, cloud_mixing_ratio: float, max_distance: float
+) -> np.ndarray:
+    """
+    3-D distance (m) from each cell of one y row to the nearest cloudy cell.
+
+    "Cloudy" means total hydrometeor mixing ratio above
+    ``cloud_mixing_ratio``. The Euclidean distance transform runs on a band of
+    rows around the plane, wide enough to contain any cloud within
+    ``max_distance``, instead of the whole domain: every distance up to
+    ``max_distance`` is then exact, and larger ones only need to be "larger",
+    which is all the filter asks. Returns a (z, x) array; inf when the band
+    holds no cloud at all.
+    """
+    # Cloud mask from the sum of every hydrometeor mixing ratio present.
+    total_mixing_ratio = sum(
+        clouds[name] for name in HYDROMETEOR_MIXING_RATIOS if name in clouds
+    )
+    # Grid spacings (m) along z, y, x for an anisotropic distance.
+    spacing_zyx = [
+        float(np.mean(np.diff(clouds[axis].values))) for axis in ("z", "y", "x")
+    ]
+    # Rows within max_distance (+1 for rounding) of the plane.
+    band_half_width = int(np.ceil(max_distance / spacing_zyx[1])) + 1
+    band_start = max(plane_y_index - band_half_width, 0)
+    band_stop = min(plane_y_index + band_half_width + 1, clouds.sizes["y"])
+    cloudy_band = (
+        total_mixing_ratio.isel(y=slice(band_start, band_stop))
+        .transpose("z", "y", "x")
+        .values
+        > cloud_mixing_ratio
+    )
+    plane_row_in_band = plane_y_index - band_start
+    if not cloudy_band.any():
+        return np.full((clouds.sizes["z"], clouds.sizes["x"]), np.inf)
+    # Distance from every clear cell to the nearest cloudy one (0 inside cloud).
+    distance_band = ndimage.distance_transform_edt(~cloudy_band, sampling=spacing_zyx)
+    return distance_band[:, plane_row_in_band, :]
 
 
 def pinned_view(bundle_dir: Path):
@@ -115,7 +205,30 @@ def pinned_view(bundle_dir: Path):
     )
 
 
-def draw_horizontal_colorbar(canvas, draw, left, top, w_limit, font, text_style):
+def arrow_colormap_name(cutaway: bool) -> str:
+    """
+    Name of the arrow colormap, registering the cut-away one on first use.
+
+    The exporter bakes arrow colors and draws its colorbar PNG by colormap
+    name, so the custom map must be registered with matplotlib by name.
+    """
+    from matplotlib import colormaps
+    from matplotlib.colors import LinearSegmentedColormap
+
+    if not cutaway:
+        return THINNED_ARROW_COLORMAP
+    if CUTAWAY_ARROW_COLORMAP not in colormaps:
+        colormaps.register(
+            LinearSegmentedColormap.from_list(
+                CUTAWAY_ARROW_COLORMAP, CUTAWAY_ARROW_COLORMAP_COLORS
+            )
+        )
+    return CUTAWAY_ARROW_COLORMAP
+
+
+def draw_horizontal_colorbar(
+    canvas, draw, left, top, w_limit, colormap_name, font, text_style
+):
     """
     Draw the arrow colormap as a horizontal bar with ticks and a title.
 
@@ -126,7 +239,7 @@ def draw_horizontal_colorbar(canvas, draw, left, top, w_limit, font, text_style)
 
     # Bar pixels: the colormap sampled across the bar's width.
     fractions = np.linspace(0.0, 1.0, COLORBAR_WIDTH)
-    bar_colors = colormaps[ARROW_COLORMAP](fractions)[:, :3]
+    bar_colors = colormaps[colormap_name](fractions)[:, :3]
     bar_pixels = np.repeat(bar_colors[None, :, :], COLORBAR_HEIGHT, axis=0)
     canvas.paste(Image.fromarray((bar_pixels * 255).astype(np.uint8)), (left, top))
     draw.rectangle(
@@ -159,7 +272,12 @@ def draw_horizontal_colorbar(canvas, draw, left, top, w_limit, font, text_style)
 
 
 def compose_side_by_side(
-    left_png: Path, right_png: Path, labels: dict, w_limit: float, output_png: Path
+    left_png: Path,
+    right_png: Path,
+    labels: dict,
+    w_limit: float,
+    colormap_name: str,
+    output_png: Path,
 ) -> None:
     """
     Place the two renders side by side and add titles, labels and a colorbar.
@@ -204,6 +322,7 @@ def compose_side_by_side(
         canvas.width - COLORBAR_WIDTH - COLORBAR_MARGIN_RIGHT,
         panel_height - COLORBAR_MARGIN_BOTTOM,
         w_limit,
+        colormap_name,
         label_font,
         text_style,
     )
@@ -246,7 +365,27 @@ def main() -> None:
     )
     slice_index = int(np.argmin(np.abs(winds["y"].values - slice_y)))
     wind_plane = winds.isel(y=[slice_index])
-    plane_y_km = float(wind_plane["y"].values[0]) / 1000.0
+    plane_y = float(wind_plane["y"].values[0])
+    plane_y_km = plane_y / 1000.0
+
+    # Clutter filter: keep an arrow if its vertical motion is strong or it
+    # is near cloud.
+    distance_to_cloud = distance_to_cloud_on_plane(
+        clouds, slice_index, arguments.cloud_mixing_ratio, arguments.near_cloud_distance
+    )
+    strong_vertical_motion = (
+        np.abs(wind_plane["W"].isel(y=0).values) >= arguments.weak_w
+    )
+    near_cloud = distance_to_cloud <= arguments.near_cloud_distance
+    wind_plane = wind_plane.assign(
+        show_arrow=(("z", "y", "x"), (strong_vertical_motion | near_cloud)[:, None, :])
+    )
+
+    # With a cutaway, draw the arrows slightly in front of the cut face.
+    if arguments.cutaway:
+        wind_plane = wind_plane.assign_coords(
+            y=wind_plane["y"] - arguments.arrow_offset
+        )
 
     # Arrows: full 3-D wind, colored by w, length proportional to speed.
     arrows = sv.make_vectors(
@@ -256,16 +395,26 @@ def main() -> None:
         w="W",
         stride={"x": arguments.stride, "z": arguments.stride},
         color_by="w",
-        cmap=ARROW_COLORMAP,
+        cmap=arrow_colormap_name(arguments.cutaway),
         clim=(-arguments.w_limit, arguments.w_limit),
         factor=arguments.arrow_length_per_mps,
         glyph_width=arguments.arrow_width,
+        mask_by="show_arrow",
     )
 
-    wind_dir = arguments.output_dir / "winds"
-    wind_scene = sv.Scene().add_clouds(
-        clouds, microphysics="rams", extinction_scale=arguments.cloud_thinning
-    )
+    if arguments.cutaway:
+        # Remove the camera-side half (y below the plane); physical optics.
+        wind_dir = arguments.output_dir / "winds_cutaway"
+        wind_scene = sv.Scene().add_clouds(
+            clouds,
+            microphysics="rams",
+            cutaway=((0.0, plane_y, 0.0), (0.0, -1.0, 0.0)),
+        )
+    else:
+        wind_dir = arguments.output_dir / "winds"
+        wind_scene = sv.Scene().add_clouds(
+            clouds, microphysics="rams", extinction_scale=arguments.cloud_thinning
+        )
     wind_scene.add(wind_plane, arrows)
     wind_scene.to_blender(
         wind_dir,
@@ -275,22 +424,33 @@ def main() -> None:
     )
 
     # ---- Side by side.
-    output_png = arguments.output_dir / f"winds_side_by_side_t{minutes:05.1f}min.png"
+    figure_kind = "cutaway" if arguments.cutaway else "thinned"
+    output_png = (
+        arguments.output_dir
+        / f"winds_{figure_kind}_side_by_side_t{minutes:05.1f}min.png"
+    )
     lattice_spacing_m = arguments.stride * float(np.diff(winds["x"].values[:2])[0])
+    if arguments.cutaway:
+        right_title = f"Cut open at y = {plane_y_km:.2f} km, with the 3-D wind"
+        cloud_note = f"Arrows drawn {arguments.arrow_offset:g} m in front of the cut"
+    else:
+        right_title = f"3-D wind on the plane y = {plane_y_km:.2f} km"
+        cloud_note = f"Cloud extinction x {arguments.cloud_thinning:g}"
     compose_side_by_side(
         realistic_dir / "render" / "frame_0001.png",
         wind_dir / "render" / "frame_0001.png",
         {
             "left_title": "Cloud, physically based",
-            "right_title": f"3-D wind on the plane y = {plane_y_km:.2f} km",
+            "right_title": right_title,
             "time": f"t = {minutes:.1f} min",
             "right_note": (
                 f"Arrows every {lattice_spacing_m:.0f} m; "
                 f"{arguments.arrow_length_per_mps:g} m of arrow per m/s\n"
-                f"Cloud extinction x {arguments.cloud_thinning:g}"
+                f"{cloud_note}"
             ),
         },
         arguments.w_limit,
+        arrow_colormap_name(arguments.cutaway),
         output_png,
     )
     print(f"Side-by-side figure: {output_png}")
