@@ -272,6 +272,7 @@ def make_vectors(
     show_scalar_bar: bool = False,
     glyph_type: str = "arrow",
     blender_instancing: bool = True,
+    glyph_width: Optional[float] = None,
     # VarSpec base
     name: Optional[str] = None,
     empty_ok: bool = False,
@@ -299,6 +300,8 @@ def make_vectors(
         glyph_type: "arrow", "cone", or "sphere"
         blender_instancing: Blender export instances arrows on exported
             points (True) or bakes full glyph meshes (False)
+        glyph_width: Constant shaft diameter of instanced Blender arrows
+            (data units); None scales arrows uniformly with their length
         name: Unique identifier
         empty_ok: Don't skip when mesh is empty
         **kwargs: Additional kwargs
@@ -328,6 +331,7 @@ def make_vectors(
         show_scalar_bar=show_scalar_bar,
         glyph_type=glyph_type,
         blender_instancing=blender_instancing,
+        glyph_width=glyph_width,
     )
     return VectorSpec(
         geometry=geometry,

@@ -624,6 +624,10 @@ def make_glyph_node_group(name, geometry_spec, material):
     scaled uniformly, like PyVista's glyphs, so its proportions are the same
     for every arrow. Point attributes (the baked "col_data" color) carry over
     to the instances, where the material reads them as INSTANCER attributes.
+
+    With ``width_mode == "constant"`` the arrow is instead built from two
+    instance sets (see :func:`_add_constant_width_arrows`) so that shaft width
+    and head size stay fixed and only the length follows the magnitude.
     """
     node_group = bpy.data.node_groups.new(f"{name}_glyphs", "GeometryNodeTree")
     node_group.interface.new_socket(
@@ -643,6 +647,13 @@ def make_glyph_node_group(name, geometry_spec, material):
     head_radius = float(geometry_spec.get("head_radius_fraction", 0.08))
     shaft_radius = float(geometry_spec.get("shaft_radius_fraction", 0.03))
     glyph_type = geometry_spec.get("glyph_type", "arrow")
+
+    if geometry_spec.get("width_mode") == "constant":
+        instances_socket = _add_constant_width_arrows(
+            nodes, links, group_input.outputs["Geometry"], geometry_spec, material
+        )
+        links.new(instances_socket, group_output.inputs["Geometry"])
+        return node_group
 
     def translated(geometry_socket, z_offset, location):
         """Move a primitive (built centered on the origin) up by z_offset."""
@@ -722,6 +733,140 @@ def make_glyph_node_group(name, geometry_spec, material):
     links.new(length.outputs["Value"], instance.inputs["Scale"])
     links.new(instance.outputs["Instances"], group_output.inputs["Geometry"])
     return node_group
+
+
+def _add_constant_width_arrows(nodes, links, points_socket, geometry_spec, material):
+    """
+    Constant-width arrows: fixed shaft width and head size, variable length.
+
+    One mesh scaled per instance cannot do this (stretching it would stretch
+    the head too), so each arrow is two instances placed on the same point:
+
+    * shaft: a unit cylinder (radius 1, z from 0 to 1) scaled to
+      (shaft_radius, shaft_radius, shaft_length), where
+      shaft_length = max(L - head_length, 0) and L = length_per_unit * |v|;
+    * head: a fixed-size cone (base at 0, tip at head_length), moved from the
+      point to the end of the shaft, and shrunk uniformly by min(L /
+      head_length, 1) so an arrow shorter than a head is a small cone.
+
+    Both are aligned with the vector by the same rotation. Returns the output
+    socket of the joined instances.
+    """
+    shaft_radius = float(geometry_spec["shaft_radius"])
+    head_radius = float(geometry_spec["head_radius"])
+    head_length = float(geometry_spec["head_length"])
+
+    def math_node(operation, location, constant=None):
+        node = nodes.new("ShaderNodeMath")
+        node.operation = operation
+        node.location = location
+        if constant is not None:
+            node.inputs[1].default_value = constant
+        return node
+
+    # ---- Per-point quantities from the vector attribute.
+    vector_attribute = nodes.new("GeometryNodeInputNamedAttribute")
+    vector_attribute.location = (-900, 300)
+    vector_attribute.data_type = "FLOAT_VECTOR"
+    vector_attribute.inputs["Name"].default_value = GLYPH_VECTOR_ATTRIBUTE
+    vector_socket = vector_attribute.outputs["Attribute"]
+    align = nodes.new("FunctionNodeAlignRotationToVector")
+    align.location = (-600, 450)
+    align.axis = "Z"
+    links.new(vector_socket, align.inputs["Vector"])
+    direction = nodes.new("ShaderNodeVectorMath")
+    direction.operation = "NORMALIZE"
+    direction.location = (-600, 300)
+    links.new(vector_socket, direction.inputs[0])
+    magnitude = nodes.new("ShaderNodeVectorMath")
+    magnitude.operation = "LENGTH"
+    magnitude.location = (-600, 150)
+    links.new(vector_socket, magnitude.inputs[0])
+    # Arrow length L in data units.
+    arrow_length = math_node(
+        "MULTIPLY", (-400, 150), float(geometry_spec.get("length_per_unit", 1.0))
+    )
+    links.new(magnitude.outputs["Value"], arrow_length.inputs[0])
+    # Shaft length: what is left after the head, never negative.
+    shaft_length_raw = math_node("SUBTRACT", (-200, 150), head_length)
+    links.new(arrow_length.outputs["Value"], shaft_length_raw.inputs[0])
+    shaft_length = math_node("MAXIMUM", (0, 150), 0.0)
+    links.new(shaft_length_raw.outputs["Value"], shaft_length.inputs[0])
+    # Head shrink factor for arrows shorter than one head.
+    head_fraction = math_node("DIVIDE", (-200, 0), head_length)
+    links.new(arrow_length.outputs["Value"], head_fraction.inputs[0])
+    head_scale = math_node("MINIMUM", (0, 0), 1.0)
+    links.new(head_fraction.outputs["Value"], head_scale.inputs[0])
+
+    # ---- Shaft instances.
+    shaft = nodes.new("GeometryNodeMeshCylinder")
+    shaft.location = (-600, -250)
+    shaft.inputs["Vertices"].default_value = GLYPH_CROSS_SECTION_VERTICES
+    shaft.inputs["Radius"].default_value = 1.0
+    shaft.inputs["Depth"].default_value = 1.0
+    shaft_base_at_origin = nodes.new("GeometryNodeTransform")
+    shaft_base_at_origin.location = (-400, -250)
+    shaft_base_at_origin.inputs["Translation"].default_value = (0.0, 0.0, 0.5)
+    links.new(shaft.outputs["Mesh"], shaft_base_at_origin.inputs["Geometry"])
+    shaft_material = nodes.new("GeometryNodeSetMaterial")
+    shaft_material.location = (-200, -250)
+    shaft_material.inputs["Material"].default_value = material
+    links.new(
+        shaft_base_at_origin.outputs["Geometry"], shaft_material.inputs["Geometry"]
+    )
+    shaft_scale = nodes.new("ShaderNodeCombineXYZ")
+    shaft_scale.location = (200, 150)
+    shaft_scale.inputs["X"].default_value = shaft_radius
+    shaft_scale.inputs["Y"].default_value = shaft_radius
+    links.new(shaft_length.outputs["Value"], shaft_scale.inputs["Z"])
+    shaft_instances = nodes.new("GeometryNodeInstanceOnPoints")
+    shaft_instances.location = (400, 100)
+    links.new(points_socket, shaft_instances.inputs["Points"])
+    links.new(shaft_material.outputs["Geometry"], shaft_instances.inputs["Instance"])
+    links.new(align.outputs["Rotation"], shaft_instances.inputs["Rotation"])
+    links.new(shaft_scale.outputs["Vector"], shaft_instances.inputs["Scale"])
+
+    # ---- Head instances, at the end of each shaft.
+    head = nodes.new("GeometryNodeMeshCone")
+    head.location = (-600, -500)
+    head.inputs["Vertices"].default_value = GLYPH_CROSS_SECTION_VERTICES
+    head.inputs["Radius Bottom"].default_value = head_radius
+    head.inputs["Radius Top"].default_value = 0.0
+    head.inputs["Depth"].default_value = head_length
+    head_base_at_origin = nodes.new("GeometryNodeTransform")
+    head_base_at_origin.location = (-400, -500)
+    head_base_at_origin.inputs["Translation"].default_value = (
+        0.0,
+        0.0,
+        head_length / 2,
+    )
+    links.new(head.outputs["Mesh"], head_base_at_origin.inputs["Geometry"])
+    head_material = nodes.new("GeometryNodeSetMaterial")
+    head_material.location = (-200, -500)
+    head_material.inputs["Material"].default_value = material
+    links.new(head_base_at_origin.outputs["Geometry"], head_material.inputs["Geometry"])
+    shaft_offset = nodes.new("ShaderNodeVectorMath")
+    shaft_offset.operation = "SCALE"
+    shaft_offset.location = (200, -100)
+    links.new(direction.outputs["Vector"], shaft_offset.inputs[0])
+    links.new(shaft_length.outputs["Value"], shaft_offset.inputs["Scale"])
+    head_points = nodes.new("GeometryNodeSetPosition")
+    head_points.location = (400, -150)
+    links.new(points_socket, head_points.inputs["Geometry"])
+    links.new(shaft_offset.outputs["Vector"], head_points.inputs["Offset"])
+    head_instances = nodes.new("GeometryNodeInstanceOnPoints")
+    head_instances.location = (600, -200)
+    links.new(head_points.outputs["Geometry"], head_instances.inputs["Points"])
+    links.new(head_material.outputs["Geometry"], head_instances.inputs["Instance"])
+    links.new(align.outputs["Rotation"], head_instances.inputs["Rotation"])
+    links.new(head_scale.outputs["Value"], head_instances.inputs["Scale"])
+
+    # ---- Both parts together.
+    join = nodes.new("GeometryNodeJoinGeometry")
+    join.location = (800, 0)
+    links.new(shaft_instances.outputs["Instances"], join.inputs["Geometry"])
+    links.new(head_instances.outputs["Instances"], join.inputs["Geometry"])
+    return join.outputs["Geometry"]
 
 
 def make_glyph_point_cloud(name, positions, vectors, colors_srgb):

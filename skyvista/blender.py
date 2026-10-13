@@ -968,6 +968,11 @@ ARROW_SHAFT_RADIUS_FRACTION = 0.03
 ARROW_HEAD_RADIUS_FRACTION = 0.08
 ARROW_HEAD_LENGTH_FRACTION = 0.28
 
+# Constant-width arrows (VectorAppearance.glyph_width): head size as multiples
+# of the shaft diameter.
+CONSTANT_WIDTH_HEAD_DIAMETER_PER_SHAFT_DIAMETER = 2.6
+CONSTANT_WIDTH_HEAD_LENGTH_PER_SHAFT_DIAMETER = 3.5
+
 
 def _rectilinear_glyph_points(
     spec, dataset_at_time
@@ -1155,6 +1160,22 @@ def _build_vector_points_entry(
         },
         "material": material,
     }
+    if appearance.glyph_width is not None:
+        # Fixed shaft and head size in data units; only the length varies.
+        shaft_diameter = float(appearance.glyph_width)
+        object_entry["geometry"].update(
+            {
+                "width_mode": "constant",
+                "shaft_radius": shaft_diameter / 2,
+                "head_radius": shaft_diameter
+                * CONSTANT_WIDTH_HEAD_DIAMETER_PER_SHAFT_DIAMETER
+                / 2,
+                "head_length": shaft_diameter
+                * CONSTANT_WIDTH_HEAD_LENGTH_PER_SHAFT_DIAMETER,
+            }
+        )
+    else:
+        object_entry["geometry"]["width_mode"] = "proportional"
     return object_entry, running_bounds
 
 

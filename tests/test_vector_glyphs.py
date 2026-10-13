@@ -159,3 +159,17 @@ def test_explicit_camera_view_is_used_verbatim(wind_dataset, tmp_path):
     (keyframe,) = manifest["camera"]["keyframes"]
     assert keyframe["location"] == [5000.0, -6000.0, 1500.0]
     assert keyframe["look_at"] == [400.0, 300.0, 200.0]
+
+
+def test_constant_width_arrows_record_fixed_part_sizes(wind_dataset, tmp_path):
+    scene = sv.Scene().add_vectors(
+        wind_dataset, "wind", u="U", v="V", w="W", glyph_width=40.0
+    )
+    scene.to_blender(tmp_path / "bundle")
+    manifest = json.loads((tmp_path / "bundle" / "scene.json").read_text())
+    geometry = manifest["objects"][0]["geometry"]
+    assert geometry["width_mode"] == "constant"
+    assert geometry["shaft_radius"] == pytest.approx(20.0)
+    # The head is wider than the shaft and has a fixed length.
+    assert geometry["head_radius"] > geometry["shaft_radius"]
+    assert geometry["head_length"] > 0

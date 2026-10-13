@@ -148,10 +148,17 @@ class VectorAppearance(Appearance):
             Blender instances one arrow per point with geometry nodes, so files
             stay small and arrow size/shape can be changed in Blender without
             re-exporting. False bakes PyVista's full glyph meshes into Alembic.
+        glyph_width: Shaft diameter of instanced Blender arrows, in data
+            length units (e.g. meters). None scales each arrow uniformly with
+            its length (PyVista's behavior), so weak vectors get thin, hard to
+            see arrows. A width keeps every shaft that wide and every head the
+            same size, and only the length follows the magnitude (matplotlib
+            quiver's convention), which reads better in a distant 3-D view.
     """
 
     glyph_type: str = "arrow"
     blender_instancing: bool = True
+    glyph_width: Optional[float] = None
 
 
 @dataclass
