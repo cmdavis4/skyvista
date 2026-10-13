@@ -8,6 +8,8 @@ holds the grid coordinates as ``__xtn01``, ``__ytn01`` and ``__ztn01``
 records. This module joins the two into a ``Dataset`` that
 ``skyvista.Scene.add_clouds`` understands: RAMS mixing ratios (``R?P``),
 number concentrations (``C?P``), and the base-state air density ``DN0``.
+:func:`load_rams_lite_winds` adds the wind, moved from RAMS's staggered grid
+onto the cell centres where the hydrometeors live.
 
 ZFP-compressed output
 ---------------------
@@ -171,6 +173,89 @@ def load_rams_lite_hydrometeors(
         data_variables,
         coords={
             "z": coordinates["z"][level_slice],
+            "y": coordinates["y"],
+            "x": coordinates["x"],
+            "time": model_time_seconds(data_path),
+        },
+    )
+
+
+def _center_from_upper_faces(face_values: np.ndarray, axis: int) -> np.ndarray:
+    """
+    Average a staggered field from cell faces onto cell centres along one axis.
+
+    RAMS uses an Arakawa C grid: ``UC[i]`` sits on the east face of cell ``i``
+    (header ``xmn[i] = xtn[i] + dx/2``), ``VC[j]`` on the north face and
+    ``WC[k]`` on the top face. The centre value of cell ``i`` is therefore the
+    mean of its west face (``i - 1``) and its east face (``i``). The first cell
+    has no west face in the array, so it takes its east-face value.
+    """
+    lower_faces = np.concatenate(
+        [
+            np.take(face_values, [0], axis=axis),
+            np.take(face_values, range(face_values.shape[axis] - 1), axis=axis),
+        ],
+        axis=axis,
+    )
+    return 0.5 * (lower_faces + face_values)
+
+
+def load_rams_lite_winds(
+    data_path: Path,
+    top_height: Optional[float] = None,
+    bottom_height: Optional[float] = 0.0,
+) -> xr.Dataset:
+    """
+    Read the 3-D wind at cell centres, on the levels of the hydrometeor loader.
+
+    The staggered components ``UC``, ``VC``, ``WC`` are averaged onto cell
+    centres (see :func:`_center_from_upper_faces`), so each wind vector sits
+    at the same point as the cloud fields. ``WC`` is read from one level below
+    the first kept level, because the centre of a cell needs its bottom face.
+
+    Returns:
+        Dataset with ``U``, ``V``, ``W`` (m/s), dims (z, y, x), and the same
+        coordinates as :func:`load_rams_lite_hydrometeors` for these arguments.
+    """
+    import h5py
+
+    register_zfp_filter()
+    data_path = Path(data_path)
+    header_path = data_path.with_name(data_path.name.replace("-g1.h5", "-head.txt"))
+    coordinates = read_header_coordinates(header_path)
+
+    # Levels to keep, exactly as in load_rams_lite_hydrometeors.
+    first_level = 0
+    if bottom_height is not None:
+        first_level = int(np.searchsorted(coordinates["z"], bottom_height, side="left"))
+    last_level_exclusive = len(coordinates["z"])
+    if top_height is not None:
+        last_level_exclusive = int(
+            np.searchsorted(coordinates["z"], top_height, side="right")
+        )
+    # One extra level below, for the bottom faces of the first kept cells.
+    read_slice = slice(max(first_level - 1, 0), last_level_exclusive)
+    levels_to_drop = first_level - read_slice.start
+
+    with h5py.File(data_path, "r") as h5_file:
+        # Arrays are (z, y, x): x is axis 2, y axis 1, z axis 0.
+        u_center = _center_from_upper_faces(
+            h5_file["UC"][read_slice].astype(np.float32), axis=2
+        )
+        v_center = _center_from_upper_faces(
+            h5_file["VC"][read_slice].astype(np.float32), axis=1
+        )
+        w_center = _center_from_upper_faces(
+            h5_file["WC"][read_slice].astype(np.float32), axis=0
+        )
+
+    return xr.Dataset(
+        {
+            name: (("z", "y", "x"), values[levels_to_drop:])
+            for name, values in (("U", u_center), ("V", v_center), ("W", w_center))
+        },
+        coords={
+            "z": coordinates["z"][first_level:last_level_exclusive],
             "y": coordinates["y"],
             "x": coordinates["x"],
             "time": model_time_seconds(data_path),
