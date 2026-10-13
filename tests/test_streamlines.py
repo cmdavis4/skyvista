@@ -48,7 +48,7 @@ def vortex_dataset():
 
 
 def make_vortex_streamlines(**kwargs):
-    defaults = dict(u="U", v="V", w="W", seed_stride={"x": 8, "y": 8, "z": 12})
+    defaults = {"u": "U", "v": "V", "w": "W", "seed_stride": {"x": 8, "y": 8, "z": 12}}
     return sv.make_streamlines(**(defaults | kwargs))
 
 
