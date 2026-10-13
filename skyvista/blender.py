@@ -988,7 +988,8 @@ def _rectilinear_glyph_points(
     The glyph lattice is the (strided) model grid itself, so positions are the
     Cartesian product of the x, y and z coordinates, flattened in the same
     Fortran order as the component arrays. Points where any component is
-    non-finite (masked, below ground, outside the domain) are dropped.
+    non-finite (masked, below ground, outside the domain) are dropped, as are
+    points that ``geometry.mask_by`` excludes.
 
     Returns:
         (positions (n, 3), [u, v, w] each (n,), color values (n,)).
@@ -1026,10 +1027,13 @@ def _rectilinear_glyph_points(
         spec.color_values(dataset_at_time, components), dtype=float
     )
 
-    # Drop glyphs with no defined vector.
+    # Drop glyphs with no defined vector, and any the mask excludes.
     finite = np.isfinite(positions).all(axis=1)
     for component in components:
         finite &= np.isfinite(component)
+    glyph_mask = spec.glyph_mask(dataset_at_time)
+    if glyph_mask is not None:
+        finite &= glyph_mask
     return (
         positions[finite],
         [np.asarray(component[finite], dtype=float) for component in components],

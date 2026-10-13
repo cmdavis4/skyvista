@@ -75,6 +75,10 @@ class VectorGeometry(Geometry):
         color_by: Scalar to color glyphs by: "speed" (the vector magnitude),
             "u", "v" or "w" (one component), or the name of a dataset
             variable. None = color by ``scale_by`` if set, else by speed.
+        mask_by: Name of a boolean (or 0/1) dataset variable on the same grid
+            as the components. Glyphs are drawn only where it is true, e.g. to
+            drop arrows that carry no information (weak wind far from cloud).
+            Applied after ``stride``. None draws every (strided) glyph.
     """
 
     varname: str
@@ -86,6 +90,7 @@ class VectorGeometry(Geometry):
     tolerance: Optional[float] = None
     stride: Optional[Union[int, Dict[str, int]]] = None
     color_by: Optional[str] = None
+    mask_by: Optional[str] = None
 
 
 @dataclass

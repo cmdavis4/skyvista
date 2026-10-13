@@ -263,6 +263,7 @@ class Scene:
         vertical_spacing: Optional[float] = None,
         extinction_floor: float = 1.0e-6,
         extinction_scale: float = 1.0,
+        cutaway: Optional[Tuple[Tuple[float, ...], Tuple[float, ...]]] = None,
         **kwargs,
     ) -> "Scene":
         """
@@ -282,6 +283,9 @@ class Scene:
             vertical_spacing: Uniform vertical voxel size (m) for VDB export.
             extinction_floor: Extinction (m^-1) treated as clear air.
             extinction_scale: Multiplier on extinction; 1.0 is physical.
+            cutaway: ``(point, normal)`` in data coordinates: remove the cloud
+                on the side of this plane that the normal points to, e.g.
+                ``((0, 0, 0), (0, -1, 0))`` removes the ``y < 0`` half.
             **kwargs: Additional VarSpec kwargs.
 
         Returns:
@@ -296,6 +300,7 @@ class Scene:
             vertical_spacing=vertical_spacing,
             extinction_floor=extinction_floor,
             extinction_scale=extinction_scale,
+            cutaway=cutaway,
             **kwargs,
         )
         return self.add(ds, spec)

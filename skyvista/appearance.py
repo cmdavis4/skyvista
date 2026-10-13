@@ -193,11 +193,21 @@ class CloudAppearance(Appearance):
     Attributes:
         extinction_scale: Multiplier on every species' extinction. 1.0 is the
             physical value; less than 1 makes clouds more transparent.
+        cutaway: Remove the cloud on one side of a plane, to show what lies
+            inside it, as ``(point, normal)`` in data coordinates. Cloud is
+            removed wherever ``(position - point) . normal > 0``, i.e. on the
+            side the normal points to. For example ``((0, 0, 0), (0, -1, 0))``
+            removes the ``y < 0`` half. The remaining half is rendered with
+            unchanged optics, and light reaches it through the cut face as it
+            would in a real cut. None keeps the whole cloud.
         show_scalar_bar: Off by default: a physically rendered cloud has no
             colormap, so a scalar bar would describe nothing on screen.
     """
 
     extinction_scale: float = 1.0
+    cutaway: Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = (
+        None
+    )
     show_scalar_bar: bool = False
 
     def to_blender_material(self) -> Dict[str, Any]:
@@ -208,4 +218,14 @@ class CloudAppearance(Appearance):
         exporter, which has computed them; this contributes only the
         appearance-level part.
         """
-        return {"type": "cloud", "extinction_scale": self.extinction_scale}
+        material: Dict[str, Any] = {
+            "type": "cloud",
+            "extinction_scale": self.extinction_scale,
+        }
+        if self.cutaway is not None:
+            cut_point, cut_normal = self.cutaway
+            material["cutaway"] = {
+                "point": [float(value) for value in cut_point],
+                "normal": [float(value) for value in cut_normal],
+            }
+        return material

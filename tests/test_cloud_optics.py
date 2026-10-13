@@ -254,6 +254,21 @@ class TestCloudSpec:
         expected = 1.0 - np.exp(-sampled_extinction * kwargs["opacity_unit_distance"])
         np.testing.assert_allclose(opacity, expected)
 
+    def test_cutaway_removes_one_side_of_the_plane(self, rams_like_dataset):
+        whole = sv.make_clouds().create_mesh(rams_like_dataset, 0.0)
+        y_center = float(rams_like_dataset["y"].mean())
+        cut = sv.make_clouds(cutaway=((0.0, y_center, 0.0), (0.0, -1.0, 0.0)))
+        cut_mesh = cut.create_mesh(rams_like_dataset, 0.0)
+        y_of_points = cut_mesh.points[:, 1]
+        removed = y_of_points < y_center
+        # The test cloud straddles the plane, so there is something to remove.
+        assert whole.point_data["cloud_extinction"][removed].max() > 0
+        assert np.all(cut_mesh.point_data["cloud_extinction"][removed] == 0)
+        np.testing.assert_allclose(
+            cut_mesh.point_data["cloud_extinction"][~removed],
+            whole.point_data["cloud_extinction"][~removed],
+        )
+
     def test_extinction_scale_multiplies_extinction(self, rams_like_dataset):
         physical = sv.make_clouds().create_mesh(rams_like_dataset, 0.0)
         halved = sv.make_clouds(extinction_scale=0.5).create_mesh(

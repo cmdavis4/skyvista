@@ -201,6 +201,9 @@ def make_clouds(
     extinction_floor: float = 1.0e-6,
     # Appearance
     extinction_scale: float = 1.0,
+    cutaway: Optional[
+        Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+    ] = None,
     # VarSpec base
     name: Optional[str] = None,
     empty_ok: bool = False,
@@ -227,6 +230,8 @@ def make_clouds(
             floored at a quarter of the horizontal spacing.
         extinction_floor: Extinction (m^-1) below which voxels count as clear.
         extinction_scale: Multiplier on extinction; 1.0 is physical.
+        cutaway: ``(point, normal)``: remove the cloud on the side of this
+            plane that the normal points to (see ``CloudAppearance.cutaway``).
         name: Unique identifier.
         empty_ok: Don't skip when the mesh is empty.
         **kwargs: Additional VarSpec kwargs.
@@ -244,7 +249,7 @@ def make_clouds(
         vertical_spacing=vertical_spacing,
         extinction_floor=extinction_floor,
     )
-    appearance = CloudAppearance(extinction_scale=extinction_scale)
+    appearance = CloudAppearance(extinction_scale=extinction_scale, cutaway=cutaway)
     return CloudSpec(
         geometry=geometry,
         appearance=appearance,
@@ -264,6 +269,7 @@ def make_vectors(
     tolerance: Optional[float] = None,
     stride: Optional[Union[int, Dict[str, int]]] = None,
     color_by: Optional[str] = None,
+    mask_by: Optional[str] = None,
     # Appearance
     color: Optional[str] = None,
     opacity: float = 1.0,
@@ -292,6 +298,7 @@ def make_vectors(
         stride: Keep every n-th grid point for glyphs (an int for all axes,
             or e.g. ``{"x": 8, "z": 8}``)
         color_by: "speed", "u", "v", "w", or a dataset variable to color by
+        mask_by: Boolean dataset variable; glyphs only where it is true
         color: Solid color
         opacity: Opacity (0.0 to 1.0)
         cmap: Colormap for scalar coloring
@@ -322,6 +329,7 @@ def make_vectors(
         tolerance=tolerance,
         stride=stride,
         color_by=color_by,
+        mask_by=mask_by,
     )
     appearance = VectorAppearance(
         color=color,

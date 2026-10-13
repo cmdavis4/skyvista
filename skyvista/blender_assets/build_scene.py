@@ -446,6 +446,40 @@ def _set_volume_scatter_phase(scatter_node, phase_function):
     return True
 
 
+def _cutaway_mask(nodes, links, cutaway_spec):
+    """
+    Shader nodes giving 1 where the cloud is kept and 0 on the cut-away side.
+
+    The rule is ``(position - point) . normal > 0`` -> removed, evaluated at
+    every volume sample from the Object texture coordinate. The volume's
+    object space is the VDB's physical (data) space in meters, the same space
+    the manifest's point and normal are given in. Zeroing density can only
+    lower the extinction, so Cycles' majorant (its upper bound on extinction,
+    taken from the grids) stays valid. Returns None when there is no cutaway.
+    """
+    if not cutaway_spec:
+        return None
+    coordinates = nodes.new("ShaderNodeTexCoord")
+    coordinates.location = (-1400, 400)
+    offset_from_plane = nodes.new("ShaderNodeVectorMath")
+    offset_from_plane.operation = "SUBTRACT"
+    offset_from_plane.location = (-1200, 400)
+    offset_from_plane.inputs[1].default_value = cutaway_spec["point"]
+    links.new(coordinates.outputs["Object"], offset_from_plane.inputs[0])
+    signed_distance = nodes.new("ShaderNodeVectorMath")
+    signed_distance.operation = "DOT_PRODUCT"
+    signed_distance.location = (-1000, 400)
+    signed_distance.inputs[1].default_value = cutaway_spec["normal"]
+    links.new(offset_from_plane.outputs["Vector"], signed_distance.inputs[0])
+    kept = nodes.new("ShaderNodeMath")
+    kept.operation = "LESS_THAN"
+    kept.label = "cutaway: 1 = kept"
+    kept.location = (-800, 400)
+    kept.inputs[1].default_value = 0.0
+    links.new(signed_distance.outputs["Value"], kept.inputs[0])
+    return kept.outputs["Value"]
+
+
 def make_cloud_material(name, material_spec):
     """
     Build the physically based cloud shader from a manifest cloud material.
@@ -499,6 +533,9 @@ def make_cloud_material(name, material_spec):
         material_spec.get("extinction_scale", 1.0)
     )
 
+    # Optional cutaway: a 0/1 mask, 0 on the removed side of the plane.
+    cutaway_mask_socket = _cutaway_mask(nodes, links, material_spec.get("cutaway"))
+
     accumulated_shader_socket = None
     for species_index, species in enumerate(material_spec.get("species", [])):
         row_y = -300 * species_index
@@ -520,7 +557,17 @@ def make_cloud_material(name, material_spec):
         scatter.label = f"{species['name']} scattering"
         scatter.location = (-350, row_y)
         scatter.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
-        links.new(to_per_meter.outputs[0], scatter.inputs["Density"])
+        density_socket = to_per_meter.outputs[0]
+        if cutaway_mask_socket is not None:
+            # No extinction on the cut-away side.
+            cut = nodes.new("ShaderNodeMath")
+            cut.operation = "MULTIPLY"
+            cut.label = f"{species['name']}: cutaway"
+            cut.location = (-480, row_y)
+            links.new(density_socket, cut.inputs[0])
+            links.new(cutaway_mask_socket, cut.inputs[1])
+            density_socket = cut.outputs[0]
+        links.new(density_socket, scatter.inputs["Density"])
 
         wants_mie = species.get("phase_function") == "mie"
         if wants_mie and _set_volume_scatter_phase(scatter, "mie"):

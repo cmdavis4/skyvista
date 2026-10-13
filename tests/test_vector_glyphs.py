@@ -173,3 +173,24 @@ def test_constant_width_arrows_record_fixed_part_sizes(wind_dataset, tmp_path):
     # The head is wider than the shaft and has a fixed length.
     assert geometry["head_radius"] > geometry["shaft_radius"]
     assert geometry["head_length"] > 0
+
+
+def test_mask_by_keeps_only_selected_glyphs(wind_dataset, tmp_path):
+    masked_dataset = wind_dataset.assign(keep=wind_dataset["x"] >= 400.0)
+    # Broadcast the 1-D mask to the full grid, as a real mask would be.
+    masked_dataset["keep"] = masked_dataset["keep"].broadcast_like(masked_dataset["U"])
+    scene = sv.Scene().add_vectors(
+        masked_dataset, "wind", u="U", v="V", w="W", mask_by="keep"
+    )
+    scene.to_blender(tmp_path / "bundle")
+    with np.load(
+        tmp_path / "bundle" / "data" / "vector_wind" / "points_0001.npz"
+    ) as point_file:
+        positions = point_file["positions"]
+    # x = 400 ... 800 m: 5 of the 9 columns.
+    assert len(positions) == 5 * 7 * 5
+    assert positions[:, 0].min() == pytest.approx(400.0)
+    # The PyVista path draws glyphs only at the kept points too.
+    spec = make_wind_spec(mask_by="keep")
+    unmasked_points = make_wind_spec().create_mesh(masked_dataset, None).n_points
+    assert 0 < spec.create_mesh(masked_dataset, None).n_points < unmasked_points

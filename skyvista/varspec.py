@@ -292,6 +292,21 @@ class VectorSpec(VarSpec):
             ds[self.geometry.w_varname].values.ravel(order="F"),
         ]
 
+    def glyph_mask(self, ds: xr.Dataset) -> Optional[np.ndarray]:
+        """
+        Which grid points get a glyph, flattened like the components.
+
+        Reads ``geometry.mask_by``, transposed to the u component's dimension
+        order first, so the flattened mask lines up point for point with the
+        flattened components. None when no mask is set.
+        """
+        mask_name = self.geometry.mask_by
+        if mask_name is None:
+            return None
+        component_dims = ds[self.geometry.u_varname].dims
+        mask = ds[mask_name].transpose(*component_dims).values
+        return np.asarray(mask, dtype=bool).ravel(order="F")
+
     def color_scalar_name(self) -> Optional[str]:
         """Name of the scalar the glyphs are colored by (see ``color_by``)."""
         return self.geometry.color_by or self.geometry.scale_by
@@ -368,6 +383,11 @@ class VectorSpec(VarSpec):
         color_name = self.geometry.color_by
         if color_name is not None and color_name not in ("u", "v", "w"):
             grid[color_name] = self.color_values(ds, components)
+
+        # Keep only the points the mask selects (vertices only, no cells).
+        mask = self.glyph_mask(ds)
+        if mask is not None:
+            grid = grid.extract_points(mask, adjacent_cells=False, include_cells=False)
 
         # Prepare glyph kwargs
         glyph_kwargs = {"orient": vector_name}
@@ -892,6 +912,31 @@ class CloudSpec(VarSpec):
                 optics.render_extinction = optics.render_extinction * extinction_scale
         return optics_per_species
 
+    def apply_cutaway(
+        self, extinction: xr.DataArray, dataset_at_time: xr.Dataset
+    ) -> xr.DataArray:
+        """
+        Zero the extinction on the removed side of the cutaway plane, if any.
+
+        The signed distance ``(position - point) . normal`` is built by
+        broadcasting the 1-D x, y, z coordinates, so no 3-D position array is
+        stored. Used by the PyVista preview; the Blender export instead passes
+        the plane to the shader, which applies the same rule per sample.
+        """
+        from .grids import resolve_coordinates
+
+        cutaway = self.appearance.cutaway
+        if cutaway is None:
+            return extinction
+        cut_point, cut_normal = cutaway
+        coordinate_names = resolve_coordinates(dataset_at_time, ["x", "y", "z"])
+        signed_distance = sum(
+            (dataset_at_time[coordinate_names[axis]] - cut_point[axis_index])
+            * cut_normal[axis_index]
+            for axis_index, axis in enumerate(("x", "y", "z"))
+        )
+        return extinction.where(signed_distance <= 0, 0.0)
+
     def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
         """Build the preview grid carrying the total render extinction (m^-1)."""
         from .cloud_optics import total_render_extinction
@@ -905,6 +950,7 @@ class CloudSpec(VarSpec):
             dataset_at_time, vertical_coordinate_name
         )
         total_extinction = total_render_extinction(optics_per_species)
+        total_extinction = self.apply_cutaway(total_extinction, dataset_at_time)
         dataset_with_extinction = dataset_at_time.assign(
             {CLOUD_EXTINCTION_VARIABLE: total_extinction}
         )
