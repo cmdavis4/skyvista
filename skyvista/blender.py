@@ -857,6 +857,7 @@ def _build_object_entry(
     """
     from .varspec import (
         CloudSpec,
+        DyeSpec,
         StreamlineSpec,
         TrajectorySpec,
         VectorSpec,
@@ -882,6 +883,8 @@ def _build_object_entry(
         )
     if isinstance(spec, CloudSpec):
         return _build_cloud_entry(spec, dataset, times, data_subdir, running_bounds)
+    if isinstance(spec, DyeSpec):
+        return _build_dye_entry(spec, dataset, times, data_subdir, running_bounds)
     if isinstance(spec, VolumeSpec):
         return _build_volume_entry(spec, dataset, times, data_subdir, running_bounds)
     return _build_mesh_entry(spec, dataset, times, data_subdir, fps, running_bounds)
@@ -2098,6 +2101,211 @@ def _build_cloud_entry(
             "grid_name": (
                 species_entries[0]["extinction_grid"] if species_entries else None
             ),
+            "vertical_spacing": vertical_spacing,
+        },
+        "material": material,
+    }
+    return object_entry, running_bounds
+
+
+# =============================================================================
+# Dye export (passive tracers as a colored volume)
+# =============================================================================
+def _build_dye_entry(
+    spec: "VarSpec",
+    dataset,
+    times: List[Any],
+    data_subdir: Path,
+    running_bounds: Optional[np.ndarray],
+) -> Tuple[Dict[str, Any], Optional[np.ndarray]]:
+    """
+    Export a dye spec to a two-grid VDB sequence and its manifest entry.
+
+    Steps:
+
+    1. Compute the dyed fraction at every render time and crop the export to
+       where it exceeds ``fraction_floor`` at any time (one-cell margin), so
+       the VDB transform is identical for every frame.
+    2. Resample the cropped column onto uniform vertical levels. The fraction
+       and the fraction-weighted label are interpolated, and the label is
+       their ratio, so the label stays a proper dye-weighted mean.
+    3. Write one VDB per frame holding ``dye_fraction`` (0 to 1) and
+       ``dye_label`` (in the units of the tracer values). The label's
+       background is the frame-independent dye-weighted mean label, so a
+       sample at the dye's edge blends toward a typical color, not toward 0.
+    4. Describe the material: the build script turns the fraction into
+       extinction and the label into the dye's color.
+    """
+    from .grid_utils import select_time
+    from .grids import resolve_coordinates
+    from .varspec import DYE_FRACTION_VARIABLE, DYE_LABEL_VARIABLE
+
+    geometry = spec.geometry
+    appearance = spec.appearance
+
+    # ---- Require a rectilinear grid (1-D coordinate axes)
+    coordinate_names = resolve_coordinates(dataset, ["x", "y", "z"])
+    x_name = coordinate_names["x"]
+    y_name = coordinate_names["y"]
+    z_name = coordinate_names["z"]
+    for coordinate_name in (x_name, y_name, z_name):
+        if coordinate_name not in dataset.coords or dataset[coordinate_name].ndim != 1:
+            raise NotImplementedError(
+                "Dye VDB export requires a rectilinear grid with 1-D x/y/z"
+                f" coordinates; '{coordinate_name}' is missing or"
+                " multi-dimensional. Resample to a rectilinear grid first."
+            )
+    tracer_dataset = dataset[list(geometry.tracer_varnames)]
+
+    # ---- 1. Crop to where there is dye at any time
+    x_mask = np.zeros(tracer_dataset.sizes[x_name], dtype=bool)
+    y_mask = np.zeros(tracer_dataset.sizes[y_name], dtype=bool)
+    z_mask = np.zeros(tracer_dataset.sizes[z_name], dtype=bool)
+    for time in times:
+        fraction, _ = spec.dye_fields(select_time(tracer_dataset, time))
+        has_dye = np.asarray(
+            (fraction > geometry.fraction_floor)
+            .transpose(x_name, y_name, z_name)
+            .values
+        )
+        # Project the 3-D occupancy onto each axis.
+        x_mask |= has_dye.any(axis=(1, 2))
+        y_mask |= has_dye.any(axis=(0, 2))
+        z_mask |= has_dye.any(axis=(0, 1))
+    cropped_dataset = tracer_dataset.isel(
+        {
+            x_name: _mask_to_slice(x_mask),
+            y_name: _mask_to_slice(y_mask),
+            z_name: _mask_to_slice(z_mask),
+        }
+    )
+    x_coordinates = cropped_dataset[x_name].values.astype(float)
+    y_coordinates = cropped_dataset[y_name].values.astype(float)
+    native_heights = cropped_dataset[z_name].values.astype(float)
+
+    # ---- 2. Uniform vertical levels, at the finest spacing among dyed levels
+    vertical_spacing = choose_uniform_vertical_spacing(
+        native_heights,
+        z_mask[_mask_to_slice(z_mask)],
+        horizontal_spacing=min(
+            float(np.mean(np.diff(x_coordinates))),
+            float(np.mean(np.diff(y_coordinates))),
+        ),
+    )
+    column_depth = native_heights[-1] - native_heights[0]
+    n_uniform_levels = int(np.floor(column_depth / vertical_spacing)) + 1
+    uniform_heights = native_heights[0] + vertical_spacing * np.arange(n_uniform_levels)
+
+    # ---- Index->world transform: voxel sizes on the diagonal, origin last row
+    transform_matrix = [
+        [_axis_voxel_size(x_coordinates), 0.0, 0.0, 0.0],
+        [0.0, _axis_voxel_size(y_coordinates), 0.0, 0.0],
+        [0.0, 0.0, vertical_spacing, 0.0],
+        [
+            float(x_coordinates[0]),
+            float(y_coordinates[0]),
+            float(uniform_heights[0]),
+            1.0,
+        ],
+    ]
+
+    # ---- 3. Dye fields per frame, resampled, then written
+    frame_fields: List[Tuple[np.ndarray, np.ndarray]] = []
+    total_dye = 0.0
+    total_weighted_label = 0.0
+    for time in times:
+        fraction, label = spec.dye_fields(select_time(cropped_dataset, time))
+        # Interpolate the fraction and the fraction-weighted label.
+        weighted_label = (fraction * label).fillna(0.0)
+        fraction_uniform = interpolate_to_levels(
+            fraction, z_name, native_heights, uniform_heights
+        )
+        weighted_label_uniform = interpolate_to_levels(
+            weighted_label, z_name, native_heights, uniform_heights
+        )
+        fraction_values = np.asarray(
+            fraction_uniform.transpose(x_name, y_name, z_name).values, dtype=float
+        )
+        weighted_label_values = np.asarray(
+            weighted_label_uniform.transpose(x_name, y_name, z_name).values,
+            dtype=float,
+        )
+        # Below the floor the voxel is clear air.
+        is_dyed = fraction_values > geometry.fraction_floor
+        fraction_values = np.where(is_dyed, fraction_values, 0.0)
+        frame_fields.append((fraction_values, weighted_label_values))
+        # Accumulate the dye-weighted mean label for the background value.
+        total_dye += float(fraction_values.sum())
+        total_weighted_label += float(weighted_label_values[is_dyed].sum())
+
+    label_values = spec.tracer_label_values()
+    background_label = (
+        total_weighted_label / total_dye
+        if total_dye > 0
+        else 0.5 * (min(label_values) + max(label_values))
+    )
+    object_subdir = data_subdir / spec.name
+    object_subdir.mkdir(parents=True, exist_ok=True)
+    for frame_index, (fraction_values, weighted_label_values) in enumerate(
+        frame_fields
+    ):
+        # Mean label of the dyed air; the background elsewhere.
+        is_dyed = fraction_values > 0.0
+        label_values_on_grid = np.where(
+            is_dyed,
+            weighted_label_values / np.where(is_dyed, fraction_values, 1.0),
+            background_label,
+        )
+        write_multigrid_vdb(
+            object_subdir / f"{spec.name}_{frame_index + 1:04d}.vdb",
+            {
+                DYE_FRACTION_VARIABLE: (fraction_values, 0.0),
+                DYE_LABEL_VARIABLE: (label_values_on_grid, background_label),
+            },
+            transform_matrix,
+        )
+
+    # ---- Fold the volume into the scene bounds
+    volume_corner_points = np.array(
+        [
+            [x_coordinates.min(), y_coordinates.min(), uniform_heights.min()],
+            [x_coordinates.max(), y_coordinates.max(), uniform_heights.max()],
+        ],
+        dtype=float,
+    )
+    running_bounds = _accumulate_bounds(running_bounds, volume_corner_points)
+
+    # ---- 4. Material: extinction from the fraction, color from the label
+    _, colormap_name = resolve_colormap(appearance.cmap or DEFAULT_COLORMAP_NAME)
+    colormap_lut_path = write_colormap_lut(data_subdir.parent, colormap_name)
+    color_limits = appearance.clim or (min(label_values), max(label_values))
+    material = {
+        "type": "dye",
+        "fraction_grid": DYE_FRACTION_VARIABLE,
+        "label_grid": DYE_LABEL_VARIABLE,
+        # Extinction (m^-1) of undiluted dye; the shader multiplies it by the
+        # fraction.
+        "extinction_at_full_strength": appearance.extinction_per_km
+        / METERS_PER_KILOMETER,
+        "self_illumination": appearance.self_illumination,
+        # Grid values below this are clear air.
+        "clipping": geometry.fraction_floor,
+        "coloring": {
+            "mode": "scalar_ramp",
+            "attribute": DYE_LABEL_VARIABLE,
+            "cmap": colormap_name,
+            "clim": [float(limit) for limit in color_limits],
+            "colormap_lut": colormap_lut_path,
+            "label": appearance.scalar_bar_title or "dye",
+        },
+    }
+    object_entry = {
+        "name": spec.name,
+        "spec_type": "dye",
+        "geometry": {
+            "carrier": "vdb_sequence",
+            "path_pattern": f"data/{spec.name}/{spec.name}_####.vdb",
+            "grid_name": DYE_FRACTION_VARIABLE,
             "vertical_spacing": vertical_spacing,
         },
         "material": material,

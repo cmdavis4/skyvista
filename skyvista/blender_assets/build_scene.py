@@ -279,6 +279,13 @@ def apply_exposure_relative_emission(scene):
         fraction = material.get(RELATIVE_EMISSION_PROPERTY)
         if fraction is None or not material.node_tree:
             continue
+        # A dye volume carries its scale on a Value node (see make_dye_material).
+        dye_emission_scale = material.node_tree.nodes.get(DYE_EMISSION_SCALE_NODE)
+        if dye_emission_scale is not None:
+            dye_emission_scale.outputs[0].default_value = (
+                float(fraction) * exposure_factor
+            )
+            continue
         principled = material.node_tree.nodes.get("Principled BSDF")
         if principled is None or "Emission Strength" not in principled.inputs:
             continue
@@ -634,6 +641,138 @@ def make_cloud_material(name, material_spec):
 
     if accumulated_shader_socket is not None:
         links.new(accumulated_shader_socket, output_node.inputs["Volume"])
+    return material
+
+
+# Name of the Value node holding a dye's emission scale, which
+# apply_exposure_relative_emission sets once the exposure is known.
+DYE_EMISSION_SCALE_NODE = "skyvista_dye_emission_scale"
+
+
+def make_dye_material(name, material_spec, bundle_dir):
+    """
+    Build the passive-tracer dye shader from a manifest dye material.
+
+    The dye is a colored participating medium::
+
+        Attribute(dye_fraction) x extinction_at_full_strength -> sigma (m^-1)
+        Attribute(dye_label) -> clim -> [0, 1] -> colormap -> albedo c (linear)
+        Volume Scatter(c, sigma, isotropic) + Volume Absorption(c, sigma)
+
+    Cycles' Volume Scatter has scattering coefficient ``sigma * c`` and
+    Volume Absorption has absorption coefficient ``sigma * (1 - c)``, per
+    color channel. Their sum therefore has extinction ``sigma`` in every
+    channel and single-scattering albedo ``c``. The dye scatters its own color
+    and absorbs the rest, so it looks like ink in water.
+
+    Optional self-illumination adds a Volume Emission of ``c * sigma * k``.
+    Along a ray, emission proportional to extinction saturates at radiance
+    ``k * c`` inside thick dye (the source function), and stays faint in
+    thin wisps. ``k`` is set from the exposure in
+    :func:`apply_exposure_relative_emission`, so thick dye displays as
+    ``self_illumination * c`` whatever the sky brightness.
+
+    Colormap stops arrive as sRGB and are converted to linear here, because
+    ColorRamp colors (and so the albedo) are scene-linear.
+    """
+    material = bpy.data.materials.new(name=f"{name}_mat")
+    material.use_nodes = True
+    node_tree = material.node_tree
+    nodes = node_tree.nodes
+    links = node_tree.links
+
+    # Start from just the output node.
+    for node in list(nodes):
+        if node.type != "OUTPUT_MATERIAL":
+            nodes.remove(node)
+    output_node = nodes.get("Material Output") or nodes.new("ShaderNodeOutputMaterial")
+    output_node.location = (600, 0)
+
+    # Extinction (m^-1): dyed fraction times the full-strength extinction.
+    fraction_attribute = nodes.new("ShaderNodeAttribute")
+    fraction_attribute.attribute_name = material_spec["fraction_grid"]
+    fraction_attribute.label = "dyed fraction"
+    fraction_attribute.location = (-800, -200)
+    extinction = nodes.new("ShaderNodeMath")
+    extinction.operation = "MULTIPLY"
+    extinction.label = "dye extinction (m^-1)"
+    extinction.inputs[1].default_value = float(
+        material_spec["extinction_at_full_strength"]
+    )
+    extinction.location = (-600, -200)
+    links.new(fraction_attribute.outputs["Fac"], extinction.inputs[0])
+
+    # Albedo: the dye label through the colormap.
+    coloring = material_spec["coloring"]
+    label_attribute = nodes.new("ShaderNodeAttribute")
+    label_attribute.attribute_name = material_spec["label_grid"]
+    label_attribute.label = "dye label"
+    label_attribute.location = (-800, 200)
+    label_to_unit = nodes.new("ShaderNodeMapRange")
+    label_to_unit.location = (-600, 200)
+    label_to_unit.inputs["From Min"].default_value = float(coloring["clim"][0])
+    label_to_unit.inputs["From Max"].default_value = float(coloring["clim"][1])
+    links.new(label_attribute.outputs["Fac"], label_to_unit.inputs["Value"])
+    color_ramp = nodes.new("ShaderNodeValToRGB")
+    color_ramp.location = (-400, 200)
+    ramp = color_ramp.color_ramp
+    while len(ramp.elements) > 1:
+        ramp.elements.remove(ramp.elements[-1])
+    for stop_index, (position, r, g, b) in enumerate(
+        load_colormap_stops(bundle_dir, coloring)
+    ):
+        element = ramp.elements[0] if stop_index == 0 else ramp.elements.new(position)
+        element.position = float(position)
+        element.color = (srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b), 1.0)
+    links.new(label_to_unit.outputs["Result"], color_ramp.inputs["Fac"])
+    albedo_socket = color_ramp.outputs["Color"]
+
+    # Scattering (albedo c) plus absorption (1 - c): extinction sigma overall.
+    scatter = nodes.new("ShaderNodeVolumeScatter")
+    scatter.label = "dye scattering"
+    scatter.location = (-100, 150)
+    _set_volume_scatter_phase(scatter, "henyey_greenstein")
+    scatter.inputs["Anisotropy"].default_value = 0.0
+    links.new(albedo_socket, scatter.inputs["Color"])
+    links.new(extinction.outputs[0], scatter.inputs["Density"])
+    absorption = nodes.new("ShaderNodeVolumeAbsorption")
+    absorption.label = "dye absorption"
+    absorption.location = (-100, -50)
+    links.new(albedo_socket, absorption.inputs["Color"])
+    links.new(extinction.outputs[0], absorption.inputs["Density"])
+    medium = nodes.new("ShaderNodeAddShader")
+    medium.location = (150, 50)
+    links.new(scatter.outputs[0], medium.inputs[0])
+    links.new(absorption.outputs[0], medium.inputs[1])
+    volume_socket = medium.outputs[0]
+
+    # Optional self-illumination: emission proportional to extinction.
+    self_illumination = float(material_spec.get("self_illumination", 0.0))
+    if self_illumination > 0.0:
+        emission_scale = nodes.new("ShaderNodeValue")
+        emission_scale.name = DYE_EMISSION_SCALE_NODE
+        emission_scale.label = "emission scale (set from exposure)"
+        emission_scale.outputs[0].default_value = self_illumination
+        emission_scale.location = (-600, -400)
+        emission_strength = nodes.new("ShaderNodeMath")
+        emission_strength.operation = "MULTIPLY"
+        emission_strength.location = (-400, -350)
+        links.new(extinction.outputs[0], emission_strength.inputs[0])
+        links.new(emission_scale.outputs[0], emission_strength.inputs[1])
+        emission = nodes.new("ShaderNodeEmission")
+        emission.label = "dye self-illumination"
+        emission.location = (-100, -300)
+        links.new(albedo_socket, emission.inputs["Color"])
+        links.new(emission_strength.outputs[0], emission.inputs["Strength"])
+        with_emission = nodes.new("ShaderNodeAddShader")
+        with_emission.location = (350, -50)
+        links.new(volume_socket, with_emission.inputs[0])
+        links.new(emission.outputs[0], with_emission.inputs[1])
+        volume_socket = with_emission.outputs[0]
+        # Picked up by apply_exposure_relative_emission.
+        material[RELATIVE_EMISSION_PROPERTY] = self_illumination
+
+    links.new(volume_socket, output_node.inputs["Volume"])
     return material
 
 
@@ -1280,14 +1419,19 @@ def import_volume_object(bundle_dir, object_spec, root_empty, frame_start, n_fra
 
     parent_keep_local(volume_object, root_empty)
     material_spec = object_spec["material"]
-    if material_spec.get("type") == "cloud":
-        material = make_cloud_material(object_spec["name"], material_spec)
+    material_type = material_spec.get("type")
+    if material_type in ("cloud", "dye"):
+        material = (
+            make_cloud_material(object_spec["name"], material_spec)
+            if material_type == "cloud"
+            else make_dye_material(object_spec["name"], material_spec, bundle_dir)
+        )
         render_settings = volume_data.render
         # Density per object unit (= per meter of the VDB transform), so the
         # optical depth is physical for any uniform scene scale.
         if hasattr(render_settings, "space"):
             render_settings.space = "OBJECT"
-        # Grid values below the export's extinction floor are clear air.
+        # Grid values below the export's floor are clear air.
         if hasattr(render_settings, "clipping"):
             render_settings.clipping = float(material_spec.get("clipping", 0.0))
     else:

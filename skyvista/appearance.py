@@ -270,3 +270,32 @@ class CloudAppearance(Appearance):
                 "normal": [float(value) for value in cut_normal],
             }
         return material
+
+
+@dataclass
+class DyeAppearance(Appearance):
+    """
+    Appearance of a passive-tracer dye volume.
+
+    The dye is a colored participating medium. At full strength (dyed
+    fraction 1) its extinction is ``extinction_per_km`` per kilometer of
+    path, and it scales linearly with the dyed fraction. Its single-scattering
+    albedo in each color channel is the colormap color of the cell's dye
+    label. So the dye scatters its own color and absorbs the rest, like ink
+    in water: it looks colored in reflected light, and it darkens and tints
+    what lies behind it.
+
+    Attributes:
+        extinction_per_km: Optical depth of one kilometer of undiluted dye.
+        self_illumination: Emission that keeps the dye colored in shadow, as
+            a fraction of the display's white level. Each voxel emits in
+            proportion to its extinction, so an optically thick region of dye
+            shows its color at this brightness however it is lit, and a thin
+            wisp stays faint. 0 is a purely physical (lit) dye.
+        show_scalar_bar: Off by default. The Blender figure scripts draw their
+            own colorbars.
+    """
+
+    extinction_per_km: float = 2.0
+    self_illumination: float = 0.0
+    show_scalar_bar: bool = False

@@ -29,6 +29,7 @@ from .appearance import (
     Appearance,
     CloudAppearance,
     ContourAppearance,
+    DyeAppearance,
     StreamlineAppearance,
     TrajectoryAppearance,
     VectorAppearance,
@@ -37,6 +38,7 @@ from .appearance import (
 from .geometry import (
     CloudGeometry,
     ContourGeometry,
+    DyeGeometry,
     SliceGeometry,
     StreamlineGeometry,
     TrajectoryGeometry,
@@ -47,6 +49,7 @@ from .scene import Scene
 from .varspec import (
     CloudSpec,
     ContourSpec,
+    DyeSpec,
     SliceSpec,
     StreamlineSpec,
     TrajectorySpec,
@@ -439,6 +442,97 @@ def make_streamlines(
         scalar_bar_title=scalar_bar_title,
     )
     return StreamlineSpec(
+        geometry=geometry,
+        appearance=appearance,
+        name=name,
+        empty_ok=empty_ok,
+        **kwargs,
+    )
+
+
+def make_dye(
+    tracers: List[str],
+    tracer_values: Optional[List[float]] = None,
+    reference_value: float = 1.0,
+    min_vertical_displacement: Optional[float] = None,
+    fraction_floor: float = 1.0e-3,
+    preview_fraction: float = 0.3,
+    # Appearance
+    cmap: Optional[str] = "turbo",
+    clim: Optional[Tuple[float, float]] = None,
+    extinction_per_km: float = 2.0,
+    self_illumination: float = 0.0,
+    show_scalar_bar: bool = False,
+    scalar_bar_title: Optional[str] = None,
+    # VarSpec base
+    name: Optional[str] = None,
+    empty_ok: bool = False,
+    **kwargs,
+) -> DyeSpec:
+    """
+    Create a dye spec: passive tracers drawn as a colored, translucent medium.
+
+    Each cell holds dye in proportion to the share of its air that the
+    tracers mark, colored by the tracer-weighted mean of ``tracer_values``.
+    With layered tracers and their starting heights as values, the color is
+    where the air came from. See :class:`~skyvista.geometry.DyeGeometry` and
+    :class:`~skyvista.appearance.DyeAppearance`.
+
+    Args:
+        tracers: Tracer variable names.
+        tracer_values: One label per tracer (e.g. starting height, m); None
+            labels tracers by index.
+        reference_value: Tracer value of undiluted marked air.
+        min_vertical_displacement: Show only air moved more than this (m)
+            from its starting height; needs heights as ``tracer_values``.
+        fraction_floor: Dyed fraction treated as clear in the VDB export.
+        preview_fraction: Dyed fraction of the PyVista preview isosurface.
+        cmap: Colormap of the label.
+        clim: Label range of the colormap; None uses the tracer values' range.
+        extinction_per_km: Optical depth per km of undiluted dye.
+        self_illumination: Emission as a fraction of display white (Blender).
+        show_scalar_bar: Show scalar bar.
+        scalar_bar_title: Scalar bar / colorbar title.
+        name: Unique identifier.
+        empty_ok: Don't skip when the mesh is empty.
+        **kwargs: Additional VarSpec kwargs.
+
+    Returns:
+        DyeSpec instance.
+
+    Example:
+        >>> spec = make_dye(
+        ...     [f"TRACERP{i:03d}" for i in range(1, 21)],
+        ...     tracer_values=[200.0 * i - 100.0 for i in range(1, 21)],
+        ...     reference_value=1e5,
+        ...     min_vertical_displacement=1000.0,
+        ... )
+    """
+    geometry = DyeGeometry(
+        tracer_varnames=list(tracers),
+        tracer_values=None if tracer_values is None else list(tracer_values),
+        reference_value=reference_value,
+        min_vertical_displacement=min_vertical_displacement,
+        fraction_floor=fraction_floor,
+        preview_fraction=preview_fraction,
+    )
+    # Default color range: the span of the tracer labels.
+    if clim is None:
+        label_values = (
+            list(tracer_values)
+            if tracer_values is not None
+            else list(range(len(geometry.tracer_varnames)))
+        )
+        clim = (float(min(label_values)), float(max(label_values)))
+    appearance = DyeAppearance(
+        cmap=cmap,
+        clim=clim,
+        extinction_per_km=extinction_per_km,
+        self_illumination=self_illumination,
+        show_scalar_bar=show_scalar_bar,
+        scalar_bar_title=scalar_bar_title,
+    )
+    return DyeSpec(
         geometry=geometry,
         appearance=appearance,
         name=name,

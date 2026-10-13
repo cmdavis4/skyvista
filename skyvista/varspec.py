@@ -23,6 +23,7 @@ from .appearance import (
     Appearance,
     CloudAppearance,
     ContourAppearance,
+    DyeAppearance,
     StreamlineAppearance,
     TrajectoryAppearance,
     VectorAppearance,
@@ -31,6 +32,7 @@ from .appearance import (
 from .geometry import (
     CloudGeometry,
     ContourGeometry,
+    DyeGeometry,
     Geometry,
     SliceGeometry,
     StreamlineGeometry,
@@ -1222,4 +1224,134 @@ class CloudSpec(VarSpec):
             "opacity_unit_distance": unit_distance,
         }
         kwargs.update(self.pyvista_add_kwargs)
+        return kwargs
+
+
+# Names of the dye fields on the preview grid and in the Blender export.
+DYE_FRACTION_VARIABLE = "dye_fraction"
+DYE_LABEL_VARIABLE = "dye_label"
+
+
+@dataclass
+class DyeSpec(VarSpec):
+    """
+    Passive tracers rendered as a colored dye.
+
+    Each cell's dyed fraction sets how much dye it holds, and the
+    tracer-weighted mean of the per-tracer values (its "label", e.g. the mean
+    starting height of its air) sets the dye's color through the colormap.
+    See :class:`~skyvista.geometry.DyeGeometry` for both definitions and
+    :class:`~skyvista.appearance.DyeAppearance` for the optics.
+
+    The Blender backend renders the dye as a scattering and absorbing volume
+    in Cycles. ``Scene.show()`` draws a preview: the isosurface at
+    ``preview_fraction``, colored by the label.
+    """
+
+    geometry: DyeGeometry = field(default_factory=DyeGeometry)
+    appearance: DyeAppearance = field(default_factory=DyeAppearance)
+
+    def __post_init__(self):
+        if self.name is None:
+            self.name = "dye"
+        n_tracers = len(self.geometry.tracer_varnames)
+        if n_tracers == 0:
+            raise ValueError("DyeGeometry needs at least one tracer variable.")
+        if (
+            self.geometry.tracer_values is not None
+            and len(self.geometry.tracer_values) != n_tracers
+        ):
+            raise ValueError(
+                f"Got {len(self.geometry.tracer_values)} tracer_values for "
+                f"{n_tracers} tracer variables; give one value per tracer."
+            )
+        if (
+            self.geometry.min_vertical_displacement is not None
+            and self.geometry.tracer_values is None
+        ):
+            raise ValueError(
+                "min_vertical_displacement needs tracer_values: the starting "
+                "height (m) of each tracer."
+            )
+
+    def tracer_label_values(self) -> List[float]:
+        """The value each tracer contributes to the label (default: its index)."""
+        if self.geometry.tracer_values is None:
+            return [float(index) for index in range(len(self.geometry.tracer_varnames))]
+        return [float(value) for value in self.geometry.tracer_values]
+
+    def dye_fields(
+        self, dataset_at_time: xr.Dataset
+    ) -> "tuple[xr.DataArray, xr.DataArray]":
+        """
+        The dyed fraction and the dye label at one time.
+
+        Tracers are accumulated one at a time, so memory holds only the two
+        running sums, never all tracers at once. Each tracer is first
+        clipped at 0 (advection undershoots leave small negative values)
+        and, with ``min_vertical_displacement``, zeroed within that distance
+        of its starting height. Where no dye is present the label is NaN.
+
+        Returns:
+            (fraction, label), both on the dataset's grid.
+        """
+        from .grids import resolve_coordinate
+
+        geometry = self.geometry
+        heights = None
+        if geometry.min_vertical_displacement is not None:
+            heights = dataset_at_time[resolve_coordinate(dataset_at_time, "z")]
+
+        fraction_sum = None
+        weighted_label_sum = None
+        for tracer_name, label_value in zip(
+            geometry.tracer_varnames, self.tracer_label_values(), strict=True
+        ):
+            # Share of each cell's air that came from this tracer's region.
+            tracer_fraction = (
+                dataset_at_time[tracer_name].clip(min=0.0).fillna(0.0)
+                / geometry.reference_value
+            )
+            # Hide air still near its starting height (undisturbed layers).
+            if heights is not None:
+                vertical_displacement = abs(heights - label_value)
+                tracer_fraction = tracer_fraction.where(
+                    vertical_displacement > geometry.min_vertical_displacement, 0.0
+                )
+            # Running sums of the fraction and the fraction-weighted label.
+            if fraction_sum is None:
+                fraction_sum = tracer_fraction
+                weighted_label_sum = tracer_fraction * label_value
+            else:
+                fraction_sum = fraction_sum + tracer_fraction
+                weighted_label_sum = weighted_label_sum + tracer_fraction * label_value
+
+        # Mean label of the dyed air, undefined where there is no dye.
+        label = (weighted_label_sum / fraction_sum).where(fraction_sum > 0)
+        return fraction_sum, label
+
+    def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
+        """Isosurface of the dyed fraction, carrying the label for coloring."""
+        dataset_at_time = select_time(ds, time)
+        fraction, label = self.dye_fields(dataset_at_time)
+        dataset_with_dye = dataset_at_time.assign(
+            {DYE_FRACTION_VARIABLE: fraction, DYE_LABEL_VARIABLE: label.fillna(0.0)}
+        )
+        grid = build_grid(
+            dataset_with_dye, varname=DYE_FRACTION_VARIABLE, grid_type=self.grid_type
+        )
+        add_scalar_to_grid(grid, dataset_with_dye, DYE_LABEL_VARIABLE)
+        surface = grid.contour(
+            isosurfaces=[self.geometry.preview_fraction], scalars=DYE_FRACTION_VARIABLE
+        )
+        # Color the surface by the label interpolated onto it.
+        surface = surface.sample(grid, pass_point_data=False, pass_cell_data=False)
+        if surface.n_points:
+            surface.set_active_scalars(DYE_LABEL_VARIABLE)
+        return surface
+
+    def get_pyvista_kwargs(self) -> Dict[str, Any]:
+        kwargs = super().get_pyvista_kwargs()
+        if self.appearance.color is None:
+            kwargs["scalars"] = DYE_LABEL_VARIABLE
         return kwargs

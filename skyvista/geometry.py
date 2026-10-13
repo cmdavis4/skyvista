@@ -227,3 +227,49 @@ class CloudGeometry(Geometry):
     air_density: Union[str, float, None] = None
     vertical_spacing: Optional[float] = None
     extinction_floor: float = 1.0e-6
+
+
+@dataclass
+class DyeGeometry(Geometry):
+    """
+    Specifies which passive tracers make up a colored "dye" volume.
+
+    A model's passive tracers label where air came from. Each tracer holds
+    the share of a cell's air that started in one labelled region, scaled by
+    ``reference_value``, e.g. one 200 m layer of starting height. The dye
+    combines them into two fields per cell:
+
+    * the **dyed fraction** ``phi = sum_i tracer_i / reference_value``, which
+      sets how much dye the cell holds (its optical density);
+    * the **dye label** ``sum_i value_i * tracer_i / sum_i tracer_i``, the
+      tracer-weighted mean of the per-tracer values, which sets its color.
+      With starting heights as values, the label is the mean starting height
+      of the cell's dyed air.
+
+    Attributes:
+        tracer_varnames: Tracer variables, one per labelled region.
+        tracer_values: One value per tracer, e.g. its starting height (m).
+            None labels tracer ``i`` with ``i``, so a categorical colormap
+            gives each tracer its own color.
+        reference_value: Tracer value of undiluted air from the region, so
+            that ``tracer / reference_value`` is a fraction in [0, 1].
+        min_vertical_displacement: Treat ``tracer_values`` as starting
+            heights (m), and hide each tracer within this vertical distance
+            of its starting height. Layered tracers fill the whole domain,
+            so undyed environment would otherwise bury everything else in
+            opaque horizontal sheets. With this set, only air that has been
+            lifted or lowered by more than the distance carries dye. None
+            dyes every tracer everywhere.
+        fraction_floor: Dyed fraction below which a voxel counts as clear and
+            is dropped from the Blender (VDB) export.
+        preview_fraction: Dyed fraction of the isosurface that the PyVista
+            preview draws (PyVista cannot color a volume by one field and
+            shade its opacity by another).
+    """
+
+    tracer_varnames: Sequence[str] = field(default_factory=list)
+    tracer_values: Optional[Sequence[float]] = None
+    reference_value: float = 1.0
+    min_vertical_displacement: Optional[float] = None
+    fraction_floor: float = 1.0e-3
+    preview_fraction: float = 0.3

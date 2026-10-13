@@ -384,6 +384,27 @@ class Scene:
 
         return self.add(ds, make_streamlines(**kwargs))
 
+    def add_dye(self, ds: xr.Dataset, tracers: List[str], **kwargs) -> "Scene":
+        """
+        Add passive tracers as a colored dye.
+
+        The dye's density is the share of each cell's air that the tracers
+        mark, and its color is the tracer-weighted mean of ``tracer_values``
+        (e.g. the starting height of the air). See
+        :func:`skyvista.make_dye` for every option.
+
+        Args:
+            ds: xarray Dataset with the tracer variables.
+            tracers: Tracer variable names.
+            **kwargs: Passed to :func:`skyvista.make_dye`.
+
+        Returns:
+            self (for method chaining)
+        """
+        from .convenience import make_dye
+
+        return self.add(ds, make_dye(tracers, **kwargs))
+
     def add_slice(
         self,
         ds: xr.Dataset,
