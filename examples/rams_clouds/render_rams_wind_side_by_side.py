@@ -105,7 +105,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--w-limit",
         type=float,
-        default=15.0,
+        default=6.0,
         help="Vertical velocity (m/s) at the ends of the arrow colormap.",
     )
     parser.add_argument(
@@ -401,6 +401,8 @@ def main() -> None:
         glyph_width=arguments.arrow_width,
         mask_by="show_arrow",
     )
+    # Half self-lit, so an arrow's color reads on its shadowed side too.
+    arrows.appearance.shader = "self_lit"
 
     if arguments.cutaway:
         # Remove the camera-side half (y below the plane); physical optics.

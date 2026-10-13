@@ -194,3 +194,13 @@ def test_mask_by_keeps_only_selected_glyphs(wind_dataset, tmp_path):
     spec = make_wind_spec(mask_by="keep")
     unmasked_points = make_wind_spec().create_mesh(masked_dataset, None).n_points
     assert 0 < spec.create_mesh(masked_dataset, None).n_points < unmasked_points
+
+
+def test_self_lit_preset_is_exposure_relative():
+    from skyvista.shaders import resolve_shader
+
+    shader = resolve_shader("self_lit")
+    assert shader["emission_from"] == "color"
+    assert shader["emission_relative_to_exposure"] is True
+    # The default look stays a plain, unlit-by-itself matte surface.
+    assert resolve_shader(None)["emission_relative_to_exposure"] is False

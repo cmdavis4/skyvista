@@ -258,6 +258,33 @@ def _principled_emission_color_input(principled):
     return None
 
 
+# Custom material property holding an exposure-relative emission fraction.
+RELATIVE_EMISSION_PROPERTY = "skyvista_relative_emission"
+
+
+def apply_exposure_relative_emission(scene):
+    """
+    Turn exposure-relative emission fractions into absolute strengths.
+
+    With the Standard view transform the displayed (linear) value is
+    ``radiance * 2**exposure``. An emission of strength ``S`` and color ``c``
+    has radiance ``S * c``, so ``S = fraction * 2**-exposure`` makes the
+    emission alone display as ``fraction * c``, independent of how bright the
+    sky is. Must run after the exposure is configured.
+    """
+    exposure_factor = 2.0 ** (-float(scene.view_settings.exposure))
+    for material in bpy.data.materials:
+        fraction = material.get(RELATIVE_EMISSION_PROPERTY)
+        if fraction is None or not material.node_tree:
+            continue
+        principled = material.node_tree.nodes.get("Principled BSDF")
+        if principled is None or "Emission Strength" not in principled.inputs:
+            continue
+        principled.inputs["Emission Strength"].default_value = (
+            float(fraction) * exposure_factor
+        )
+
+
 def make_surface_material(name, material_spec):
     """
     Build a Principled-BSDF surface material from a manifest material block.
@@ -328,6 +355,10 @@ def make_surface_material(name, material_spec):
         strength_input = principled.inputs.get("Emission Strength")
         if strength_input is not None:
             strength_input.default_value = emission_strength
+        if shader.get("emission_relative_to_exposure"):
+            # Final strength depends on the exposure, set later by
+            # apply_exposure_relative_emission.
+            material[RELATIVE_EMISSION_PROPERTY] = emission_strength
 
     # Opacity via alpha; enable alpha blending for EEVEE (Cycles honors it too).
     opacity = float(material_spec.get("opacity", 1.0))
@@ -1718,6 +1749,7 @@ def main():
     setup_world(scene, manifest)
     setup_ground(scene, manifest, transform, root_empty)
     configure_exposure(scene, manifest)
+    apply_exposure_relative_emission(scene)
 
     # A bloom pass is warranted if any surface object opted into it via its
     # shader preset (the "glow" look). Bloom is a full-frame effect, so one

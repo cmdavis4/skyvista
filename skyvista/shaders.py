@@ -67,6 +67,14 @@ class ShaderPreset:
             bloom/glare post-process (the soft halo around bright emitters).
             Bloom is a full-frame compositor effect, so a single object opting
             in turns it on for the whole render.
+        emission_relative_to_exposure: Interpret ``emission_strength`` as a
+            fraction of the color's on-screen value at the render's exposure,
+            rather than as an absolute radiance. The build script sets the
+            absolute strength to ``emission_strength * 2**-exposure`` once the
+            exposure is known. A physical sky is so bright (and its auto
+            exposure so low) that any fixed strength is either negligible or
+            blown out; this keeps self-illumination at the same visual weight
+            whatever the sun elevation.
     """
 
     base: str = "principled"
@@ -75,6 +83,7 @@ class ShaderPreset:
     emission_strength: float = 0.0
     emission_from: Optional[str] = None
     bloom: bool = False
+    emission_relative_to_exposure: bool = False
 
     def to_dict(self, preset_name: str) -> Dict[str, Any]:
         """Resolve to the manifest ``material.shader`` block for this preset."""
@@ -86,6 +95,7 @@ class ShaderPreset:
             "emission_strength": self.emission_strength,
             "emission_from": self.emission_from,
             "bloom": self.bloom,
+            "emission_relative_to_exposure": self.emission_relative_to_exposure,
         }
 
 
@@ -116,6 +126,18 @@ SHADER_PRESET_DEFINITIONS: Dict[str, ShaderPreset] = {
         emission_from="color",
     ),
 }
+
+# Self-lit: half of each color's on-screen value comes from emission, at
+# whatever exposure the render uses, and the rest from ordinary lighting. The
+# shading still shows the 3-D shape, but a glyph's data color stays readable on
+# its shadowed side -- for colormapped glyphs in a sunlit scene.
+SHADER_PRESET_DEFINITIONS["self_lit"] = ShaderPreset(
+    roughness=0.5,
+    metallic=0.0,
+    emission_strength=0.5,
+    emission_from="color",
+    emission_relative_to_exposure=True,
+)
 
 # Public tuple of valid preset names, mirroring blender.WORLD_PRESETS' role.
 SHADER_PRESETS = tuple(SHADER_PRESET_DEFINITIONS)
