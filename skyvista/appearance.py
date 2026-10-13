@@ -182,10 +182,17 @@ class TrajectoryAppearance(Appearance):
     Attributes:
         style: Rendering style - "tube" or "particle"
         silhouettes: Whether to add silhouette effect
+        blender_instancing: For the "particle" style, how the Blender export
+            carries the particles. True (default) writes each particle's
+            position and color per frame, and Blender turns them into a
+            native point cloud that Cycles renders as exact spheres, with no
+            meshes at all, so 10^5-10^6 particles stay cheap. False bakes
+            PyVista's sphere meshes into Alembic. Tubes are always baked.
     """
 
     style: str = "tube"
     silhouettes: bool = False
+    blender_instancing: bool = True
 
     def to_pyvista_kwargs(self) -> Dict[str, Any]:
         kwargs = super().to_pyvista_kwargs()

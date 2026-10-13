@@ -427,6 +427,7 @@ def make_trajectory(
     tube_resolution: int = 4,
     head_radial_resolution: int = 30,
     max_points: Optional[int] = None,
+    particle_radius: float = 250.0,
     # Appearance
     opacity: float = 1.0,
     clim: Optional[Tuple[float, float]] = None,
@@ -434,6 +435,7 @@ def make_trajectory(
     scalar_bar_title: Optional[str] = None,
     silhouettes: bool = False,
     shader: Optional[str] = None,
+    blender_instancing: bool = True,
     # VarSpec base
     name: Optional[str] = None,
     empty_ok: bool = False,
@@ -453,6 +455,7 @@ def make_trajectory(
         head_radius_frac: Arrow head radius as fraction of tube radius
         tube_resolution: Number of sides on tube
         head_radial_resolution: Resolution of arrow head
+        particle_radius: Sphere radius (data units) for style="particle"
         opacity: Opacity (0.0 to 1.0)
         clim: Color limits
         show_scalar_bar: Show scalar bar
@@ -461,6 +464,8 @@ def make_trajectory(
         shader: Blender shader preset (e.g. "glow" for the emissive, bloom-
             haloed NCAR "fountain" look); None uses the default matte surface.
             Only affects the Blender export backend.
+        blender_instancing: For style="particle", export points that Blender
+            renders as a native point cloud (True), or bake sphere meshes
         name: Unique identifier
         empty_ok: Don't skip when mesh is empty
         **kwargs: Additional kwargs
@@ -480,6 +485,7 @@ def make_trajectory(
         tube_resolution=tube_resolution,
         head_radial_resolution=head_radial_resolution,
         max_points=max_points,
+        particle_radius=particle_radius,
     )
     appearance = TrajectoryAppearance(
         color=color,
@@ -491,6 +497,7 @@ def make_trajectory(
         style=style,
         silhouettes=silhouettes,
         shader=shader,
+        blender_instancing=blender_instancing,
     )
     return TrajectorySpec(
         geometry=geometry,

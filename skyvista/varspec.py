@@ -529,13 +529,13 @@ class TrajectorySpec(VarSpec):
         if self.geometry.max_points:
             ds = ds.isel(time=slice(-self.geometry.max_points, None))
 
+        # Particles need only the current position, so one time is enough.
+        if self.appearance.style == "particle":
+            return self._create_particle_mesh(ds, trajectory_dim)
+
         # Need at least 2 time points for trajectory rendering
         if "time" in ds.dims and len(ds["time"]) < 2:
             return pv.PolyData()
-
-        # Handle particle style
-        if self.appearance.style == "particle":
-            return self._create_particle_mesh(ds, trajectory_dim)
 
         # Extract trajectory data for tube rendering
         trajectories_points_data = self._extract_trajectory_data(ds, trajectory_dim)
@@ -600,37 +600,56 @@ class TrajectorySpec(VarSpec):
 
         return trajectories_points_data
 
-    def _create_particle_mesh(self, ds: xr.Dataset, trajectory_dim: str) -> pv.DataSet:
-        """Create particle-style mesh (spheres at final positions)."""
+    def particle_positions(
+        self, ds: xr.Dataset, time: Any
+    ) -> "tuple[np.ndarray, Optional[np.ndarray]]":
+        """
+        Particle positions (n, 3) at ``time``, and their scalar values if any.
+
+        A particle sits at its track's position at the latest time not after
+        ``time`` (``time`` None = the last time). Tracks with no valid
+        position then (not yet started, or already ended) are dropped. The
+        ``limit`` on the number of tracks applies, as for tubes.
+        """
         from carlee_tools import maybe_cast_to_float
 
-        # Get final time positions
+        # Tracks may be indexed by trajectory_ix or (older data) parcel_ix.
+        trajectory_dim = "trajectory_ix" if "trajectory_ix" in ds.dims else "parcel_ix"
+        if (
+            self.limit
+            and trajectory_dim in ds.dims
+            and ds.sizes[trajectory_dim] > self.limit
+        ):
+            ds = ds.isel({trajectory_dim: slice(self.limit)})
+        # Positions at the requested time.
         if "time" in ds.dims:
+            if time is not None:
+                ds = ds.sel(time=slice(None, time))
             ds = ds.isel(time=-1)
-
-        points = np.column_stack(
-            [
-                ds["x"].values,
-                ds["y"].values,
-                ds["z"].values,
-            ]
-        )
-
+        points = np.column_stack([ds["x"].values, ds["y"].values, ds["z"].values])
         valid_mask = ~np.isnan(points).any(axis=1)
-        points = points[valid_mask]
+        scalar_values = None
+        if self.geometry.scalar and self.geometry.scalar in ds:
+            scalar_values = maybe_cast_to_float(ds[self.geometry.scalar].values)[
+                valid_mask
+            ]
+        return points[valid_mask], scalar_values
 
+    def _create_particle_mesh(self, ds: xr.Dataset, trajectory_dim: str) -> pv.DataSet:
+        """Create particle-style mesh (spheres at final positions)."""
+        points, scalar_values = self.particle_positions(ds, None)
         point_mesh = pv.PolyData(points)
 
         # Add scalar data
-        if self.geometry.scalar and self.geometry.scalar in ds:
-            scalar_values = maybe_cast_to_float(ds[self.geometry.scalar].values)
-            point_mesh[self.geometry.scalar] = scalar_values[valid_mask]
+        if scalar_values is not None:
+            point_mesh[self.geometry.scalar] = scalar_values
 
         # Convert to sphere glyphs
+        radius = self.geometry.particle_radius
         glyph_kwargs = {
             "orient": False,
             "scale": False,
-            "geom": pv.Sphere(radius=250, phi_resolution=8, theta_resolution=8),
+            "geom": pv.Sphere(radius=radius, phi_resolution=8, theta_resolution=8),
         }
         glyph_kwargs.update(self.pyvista_create_kwargs)
 

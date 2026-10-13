@@ -126,6 +126,9 @@ class TrajectoryGeometry(Geometry):
         head_radius_frac: Arrow head radius as fraction of tube radius
         tube_resolution: Number of sides on the tube
         head_radial_resolution: Resolution of arrow head cone
+        max_points: Keep only the last ``max_points`` times of each track
+        particle_radius: Sphere radius (data units) of each particle in the
+            "particle" style
     """
 
     scalar: Optional[str] = None
@@ -135,6 +138,7 @@ class TrajectoryGeometry(Geometry):
     tube_resolution: int = 4
     head_radial_resolution: int = 30
     max_points: Optional[int] = None
+    particle_radius: float = 250.0
 
 
 @dataclass

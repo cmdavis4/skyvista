@@ -726,6 +726,22 @@ def make_glyph_node_group(name, geometry_spec, material):
     shaft_radius = float(geometry_spec.get("shaft_radius_fraction", 0.03))
     glyph_type = geometry_spec.get("glyph_type", "arrow")
 
+    if glyph_type == "sphere":
+        # Particles: a native point cloud. Cycles ray-traces each point as an
+        # exact sphere of the given radius; no sphere meshes are built. The
+        # vertices' color attribute carries over to the points.
+        to_points = nodes.new("GeometryNodeMeshToPoints")
+        to_points.location = (-300, 0)
+        to_points.mode = "VERTICES"
+        to_points.inputs["Radius"].default_value = float(geometry_spec["radius"])
+        links.new(group_input.outputs["Geometry"], to_points.inputs["Mesh"])
+        set_material = nodes.new("GeometryNodeSetMaterial")
+        set_material.location = (0, 0)
+        set_material.inputs["Material"].default_value = material
+        links.new(to_points.outputs["Points"], set_material.inputs["Geometry"])
+        links.new(set_material.outputs["Geometry"], group_output.inputs["Geometry"])
+        return node_group
+
     if geometry_spec.get("width_mode") == "constant":
         instances_socket = _add_constant_width_arrows(
             nodes, links, group_input.outputs["Geometry"], geometry_spec, material
@@ -951,6 +967,8 @@ def make_glyph_point_cloud(name, positions, vectors, colors_srgb):
     """
     A vertex-only mesh: one vertex per glyph, with its vector and color.
 
+    ``vectors`` may be None (particles have no vector).
+
     Colors arrive as sRGB (matplotlib's output) and are linearized here,
     because Blender treats float color attributes as scene-linear.
     """
@@ -959,12 +977,13 @@ def make_glyph_point_cloud(name, positions, vectors, colors_srgb):
     mesh = bpy.data.meshes.new(name)
     mesh.vertices.add(len(positions))
     mesh.vertices.foreach_set("co", np.ascontiguousarray(positions, np.float32).ravel())
-    vector_attribute = mesh.attributes.new(
-        GLYPH_VECTOR_ATTRIBUTE, "FLOAT_VECTOR", "POINT"
-    )
-    vector_attribute.data.foreach_set(
-        "vector", np.ascontiguousarray(vectors, np.float32).ravel()
-    )
+    if vectors is not None:
+        vector_attribute = mesh.attributes.new(
+            GLYPH_VECTOR_ATTRIBUTE, "FLOAT_VECTOR", "POINT"
+        )
+        vector_attribute.data.foreach_set(
+            "vector", np.ascontiguousarray(vectors, np.float32).ravel()
+        )
     # sRGB -> linear, then RGBA.
     colors_srgb = np.asarray(colors_srgb, dtype=np.float64)
     colors_linear = np.where(
@@ -1045,7 +1064,7 @@ def import_point_glyphs(bundle_dir, object_spec, root_empty, frame_start):
             mesh = make_glyph_point_cloud(
                 f"{name}_{frame:04d}",
                 point_file["positions"],
-                point_file["vectors"],
+                point_file["vectors"] if "vectors" in point_file else None,
                 point_file["colors"],
             )
         point_cloud = bpy.data.objects.new(f"{name}_{frame:04d}", mesh)

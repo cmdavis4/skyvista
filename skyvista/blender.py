@@ -828,8 +828,16 @@ def _build_object_entry(
     to a VDB sequence; vector glyphs by default go to per-frame point files that
     Blender instances arrows on.
     """
-    from .varspec import CloudSpec, VectorSpec, VolumeSpec
+    from .varspec import CloudSpec, TrajectorySpec, VectorSpec, VolumeSpec
 
+    if (
+        isinstance(spec, TrajectorySpec)
+        and spec.appearance.style == "particle"
+        and spec.appearance.blender_instancing
+    ):
+        return _build_particle_points_entry(
+            spec, dataset, times, data_subdir, running_bounds
+        )
     if isinstance(spec, VectorSpec) and spec.appearance.blender_instancing:
         return _build_vector_points_entry(
             spec, dataset, times, data_subdir, running_bounds
@@ -1041,6 +1049,150 @@ def _rectilinear_glyph_points(
     )
 
 
+def _write_point_frames(
+    object_name: str,
+    appearance,
+    frame_points: List[Tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]],
+    data_subdir: Path,
+    coloring_mode: str,
+    default_label: str,
+) -> Tuple[Dict[str, Any], str]:
+    """
+    Bake colors and write one ``.npz`` point file per frame.
+
+    Shared by every point carrier (vector glyphs, particles). Colors are baked
+    here with one global range, exactly as for meshes, so they are identical
+    across frames and match the colorbar. The point data travels as ``.npz``
+    (numpy) files, not Alembic: Blender's Alembic importer keeps only vertex
+    colors, so other per-point data (vectors) would be lost.
+
+    Files: ``data/<name>/points_0001.npz`` ... holding ``positions`` (data
+    units), ``colors`` (sRGB in [0, 1], as matplotlib returns them; the build
+    script linearizes them) and, when given, ``vectors``; all float32, (n, 3).
+
+    Args:
+        object_name: Object name; also the data subdirectory.
+        appearance: The spec's appearance (color, cmap, clim, title, shader).
+        frame_points: Per frame, (positions, vectors or None, color values or
+            None).
+        data_subdir: The bundle's data directory.
+        coloring_mode: Manifest coloring mode for a colormapped object:
+            "instance_color" (colors on instances, e.g. arrows) or
+            "vertex_color" (colors on the points themselves, e.g. spheres).
+        default_label: Colorbar label when the appearance sets no title.
+
+    Returns:
+        (manifest material block, path pattern relative to the bundle).
+    """
+    # ---- The global range of the coloring scalar over all frames.
+    all_color_values = [
+        np.asarray(color_values, dtype=float)
+        for _, _, color_values in frame_points
+        if color_values is not None and np.size(color_values)
+    ]
+    global_color_min = min((np.nanmin(v) for v in all_color_values), default=np.inf)
+    global_color_max = max((np.nanmax(v) for v in all_color_values), default=-np.inf)
+
+    # ---- Coloring: solid, or a baked colormap over the global range. An
+    # explicit clim is enough by itself: a field that happens to be uniform
+    # still has a meaningful color on a user-chosen scale.
+    uses_scalar_coloring = (
+        appearance.color is None
+        and np.isfinite(global_color_min)
+        and (appearance.clim is not None or global_color_max > global_color_min)
+    )
+    color_limits: Optional[Tuple[float, float]] = None
+    colormap = colormap_name = None
+    if uses_scalar_coloring:
+        color_limits = appearance.clim or (global_color_min, global_color_max)
+        colormap, colormap_name = resolve_colormap(
+            appearance.cmap or DEFAULT_COLORMAP_NAME
+        )
+    solid_rgb = None
+    if not uses_scalar_coloring:
+        from matplotlib.colors import to_rgb
+
+        solid_rgb = np.array(to_rgb(appearance.color or "#cccccc"))
+
+    # ---- One point file per frame.
+    object_subdir = data_subdir / object_name
+    object_subdir.mkdir(parents=True, exist_ok=True)
+    for frame_index, (positions, vectors, color_values) in enumerate(frame_points):
+        if uses_scalar_coloring:
+            colors = bake_scalar_to_rgb(color_values, colormap, color_limits)
+        else:
+            colors = np.tile(solid_rgb, (len(positions), 1))
+        arrays = {
+            "positions": np.asarray(positions, dtype=np.float32).reshape(-1, 3),
+            "colors": np.asarray(colors, dtype=np.float32).reshape(-1, 3),
+        }
+        if vectors is not None:
+            arrays["vectors"] = np.asarray(vectors, dtype=np.float32).reshape(-1, 3)
+        np.savez(object_subdir / f"points_{frame_index + 1:04d}.npz", **arrays)
+
+    # ---- Manifest material.
+    material = appearance.to_blender_material()
+    if uses_scalar_coloring:
+        material["coloring"] = {
+            "mode": coloring_mode,
+            "attribute": VERTEX_COLOR_ATTRIBUTE_NAME,
+            "cmap": colormap_name,
+            "clim": list(color_limits),
+            "label": appearance.scalar_bar_title or default_label,
+        }
+    else:
+        material["coloring"] = {"mode": "solid", "color": appearance.color or "#cccccc"}
+    path_pattern = str(
+        (object_subdir / "points_####.npz").relative_to(data_subdir.parent)
+    )
+    return material, path_pattern
+
+
+def _build_particle_points_entry(
+    spec: "VarSpec",
+    dataset,
+    times: List[Any],
+    data_subdir: Path,
+    running_bounds: Optional[np.ndarray],
+) -> Tuple[Dict[str, Any], Optional[np.ndarray]]:
+    """
+    Export trajectory particles as per-frame point files.
+
+    Each frame holds every particle's position at that time and its baked
+    color. The build script turns each frame into a native Blender point cloud
+    (geometry nodes' Mesh to Points), which Cycles ray-traces as exact spheres
+    of ``particle_radius`` -- no sphere meshes are generated or stored, so the
+    cost stays small even for 10^5-10^6 particles (e.g. model parcels).
+    """
+    frame_points = []
+    for time in times:
+        positions, scalar_values = spec.particle_positions(dataset, time)
+        frame_points.append((positions, None, scalar_values))
+        running_bounds = _accumulate_bounds(running_bounds, positions)
+
+    material, path_pattern = _write_point_frames(
+        spec.name,
+        spec.appearance,
+        frame_points,
+        data_subdir,
+        coloring_mode="vertex_color",
+        default_label=spec.geometry.scalar or "",
+    )
+    object_entry = {
+        "name": spec.name,
+        "spec_type": "trajectory",
+        "geometry": {
+            "carrier": "point_glyphs",
+            "path_pattern": path_pattern,
+            "n_frames": len(frame_points),
+            "glyph_type": "sphere",
+            "radius": float(spec.geometry.particle_radius),
+        },
+        "material": material,
+    }
+    return object_entry, running_bounds
+
+
 def _build_vector_points_entry(
     spec: "VarSpec",
     dataset,
@@ -1078,9 +1230,8 @@ def _build_vector_points_entry(
         else "arrow"
     )
 
-    # ---- Pass 1: glyph points of every frame + the global color range
+    # ---- Glyph points of every frame
     frame_points = []
-    global_color_min, global_color_max = np.inf, -np.inf
     length_per_unit = spec.geometry.factor
     for time in times:
         dataset_at_time = spec.subsample(select_time(dataset, time))
@@ -1089,9 +1240,6 @@ def _build_vector_points_entry(
         )
         frame_points.append((positions, components, color_values))
         running_bounds = _accumulate_bounds(running_bounds, positions)
-        if color_values.size:
-            global_color_min = min(global_color_min, float(np.nanmin(color_values)))
-            global_color_max = max(global_color_max, float(np.nanmax(color_values)))
         # Auto arrow scale from the first frame that has any vector at all, so
         # one scale (hence comparable lengths) applies to the whole animation.
         if length_per_unit is None and positions.size:
@@ -1099,67 +1247,29 @@ def _build_vector_points_entry(
     if length_per_unit is None:
         length_per_unit = 1.0
 
-    # ---- Coloring: solid, or a baked colormap over the global range. An
-    # explicit clim is enough by itself: a field that happens to be uniform
-    # still has a meaningful color on a user-chosen scale.
-    uses_scalar_coloring = (
-        appearance.color is None
-        and np.isfinite(global_color_min)
-        and (appearance.clim is not None or global_color_max > global_color_min)
+    # ---- Colors + one point file per frame
+    material, path_pattern = _write_point_frames(
+        spec.name,
+        appearance,
+        [
+            (
+                positions,
+                np.stack(components, axis=1) if positions.size else None,
+                color_values,
+            )
+            for positions, components, color_values in frame_points
+        ],
+        data_subdir,
+        coloring_mode="instance_color",
+        default_label=spec.color_scalar_name() or "speed",
     )
-    color_limits: Optional[Tuple[float, float]] = None
-    colormap = colormap_name = None
-    if uses_scalar_coloring:
-        color_limits = appearance.clim or (global_color_min, global_color_max)
-        colormap, colormap_name = resolve_colormap(
-            appearance.cmap or DEFAULT_COLORMAP_NAME
-        )
-
-    # ---- Pass 2: write one point file per frame
-    object_subdir = data_subdir / spec.name
-    object_subdir.mkdir(parents=True, exist_ok=True)
-    solid_rgb = None
-    if not uses_scalar_coloring:
-        from matplotlib.colors import to_rgb
-
-        solid_rgb = np.array(to_rgb(appearance.color or "#cccccc"))
-    for frame_index, (positions, components, color_values) in enumerate(frame_points):
-        if uses_scalar_coloring:
-            colors = bake_scalar_to_rgb(color_values, colormap, color_limits)
-        else:
-            colors = np.tile(solid_rgb, (len(positions), 1))
-        np.savez(
-            object_subdir / f"points_{frame_index + 1:04d}.npz",
-            positions=positions.astype(np.float32),
-            vectors=(
-                np.stack(components, axis=1).astype(np.float32)
-                if positions.size
-                else np.zeros((0, 3), dtype=np.float32)
-            ),
-            colors=np.asarray(colors, dtype=np.float32).reshape(-1, 3),
-        )
-
-    # ---- Manifest entry
-    material = appearance.to_blender_material()
-    if uses_scalar_coloring:
-        material["coloring"] = {
-            "mode": "instance_color",
-            "attribute": VERTEX_COLOR_ATTRIBUTE_NAME,
-            "cmap": colormap_name,
-            "clim": list(color_limits),
-            "label": appearance.scalar_bar_title or spec.color_scalar_name() or "speed",
-        }
-    else:
-        material["coloring"] = {"mode": "solid", "color": appearance.color or "#cccccc"}
 
     object_entry = {
         "name": spec.name,
         "spec_type": "vector",
         "geometry": {
             "carrier": "point_glyphs",
-            "path_pattern": str(
-                (object_subdir / "points_####.npz").relative_to(data_subdir.parent)
-            ),
+            "path_pattern": path_pattern,
             "n_frames": len(frame_points),
             "glyph_type": glyph_type,
             "length_per_unit": float(length_per_unit),
