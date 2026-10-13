@@ -28,8 +28,8 @@ from pathlib import Path
 
 import numpy as np
 from cloud_render_config import add_render_arguments, make_cloud_export_config
-from PIL import Image, ImageDraw, ImageFont
 from rams_lite_loader import load_rams_lite_hydrometeors, load_rams_lite_winds
+from side_by_side_figure import ColorbarSpec, compose_side_by_side
 
 import skyvista as sv
 
@@ -37,11 +37,6 @@ import skyvista as sv
 STORM_MOTION_LAYER_TOP_M = 6000.0
 # Streamline colormap: diverging, white at w = 0 (reads on haze and sky).
 STREAMLINE_COLORMAP = "RdBu_r"
-# Figure layout (px).
-PANEL_DIVIDER_WIDTH = 6
-TITLE_FONT_SIZE, LABEL_FONT_SIZE = 34, 26
-COLORBAR_WIDTH, COLORBAR_HEIGHT = 420, 26
-COLORBAR_MARGIN_RIGHT, COLORBAR_MARGIN_BOTTOM = 40, 110
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -119,77 +114,6 @@ def pinned_view(bundle_dir: Path):
         tuple(keyframe["look_at"]),
         tuple(manifest["transform"]["origin_shift"]),
     )
-
-
-def compose_side_by_side(left_png, right_png, labels, w_limit, output_png) -> None:
-    """Both renders side by side with titles, a note and a w colorbar."""
-    from matplotlib import colormaps
-
-    left_panel = Image.open(left_png).convert("RGB")
-    right_panel = Image.open(right_png).convert("RGB")
-    panel_width, panel_height = left_panel.size
-    canvas = Image.new(
-        "RGB", (2 * panel_width + PANEL_DIVIDER_WIDTH, panel_height), "white"
-    )
-    canvas.paste(left_panel, (0, 0))
-    right_left = panel_width + PANEL_DIVIDER_WIDTH
-    canvas.paste(right_panel, (right_left, 0))
-    draw = ImageDraw.Draw(canvas)
-    title_font = ImageFont.load_default(size=TITLE_FONT_SIZE)
-    label_font = ImageFont.load_default(size=LABEL_FONT_SIZE)
-    text_style = {"fill": "white", "stroke_width": 3, "stroke_fill": "black"}
-    # Titles, time and note.
-    draw.text((24, 20), labels["left_title"], font=title_font, **text_style)
-    draw.text(
-        (right_left + 24, 20), labels["right_title"], font=title_font, **text_style
-    )
-    draw.text((24, 66), labels["time"], font=label_font, **text_style)
-    draw.multiline_text(
-        (right_left + 24, panel_height - 100),
-        labels["right_note"],
-        font=label_font,
-        spacing=8,
-        **text_style,
-    )
-    # Colorbar of w in the lower right of the right panel.
-    bar_left = canvas.width - COLORBAR_WIDTH - COLORBAR_MARGIN_RIGHT
-    bar_top = panel_height - COLORBAR_MARGIN_BOTTOM
-    bar_colors = colormaps[STREAMLINE_COLORMAP](np.linspace(0, 1, COLORBAR_WIDTH))[
-        :, :3
-    ]
-    bar_pixels = np.repeat(bar_colors[None], COLORBAR_HEIGHT, axis=0)
-    canvas.paste(
-        Image.fromarray((bar_pixels * 255).astype(np.uint8)), (bar_left, bar_top)
-    )
-    draw.rectangle(
-        [
-            bar_left - 1,
-            bar_top - 1,
-            bar_left + COLORBAR_WIDTH,
-            bar_top + COLORBAR_HEIGHT,
-        ],
-        outline="black",
-        width=2,
-    )
-    for tick_value in np.linspace(-w_limit, w_limit, 5):
-        tick_x = bar_left + (tick_value + w_limit) / (2 * w_limit) * (
-            COLORBAR_WIDTH - 1
-        )
-        draw.text(
-            (tick_x, bar_top + COLORBAR_HEIGHT + 10),
-            f"{tick_value:g}",
-            font=label_font,
-            anchor="ma",
-            **text_style,
-        )
-    draw.text(
-        (bar_left + COLORBAR_WIDTH / 2, bar_top - 8),
-        "Vertical velocity w (m/s)",
-        font=label_font,
-        anchor="md",
-        **text_style,
-    )
-    canvas.save(output_png)
 
 
 def main() -> None:
@@ -275,7 +199,12 @@ def main() -> None:
                 "cones point downstream"
             ),
         },
-        arguments.w_limit,
+        ColorbarSpec(
+            cmap=STREAMLINE_COLORMAP,
+            clim=(-arguments.w_limit, arguments.w_limit),
+            tick_values=np.linspace(-arguments.w_limit, arguments.w_limit, 5),
+            title="Vertical velocity w (m/s)",
+        ),
         output_png,
     )
     print(f"Side-by-side figure: {output_png}")
