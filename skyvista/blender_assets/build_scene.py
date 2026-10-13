@@ -1511,7 +1511,11 @@ def setup_compositing(scene, manifest, bundle_dir, add_bloom=False):
     whole thing is wrapped by the caller; if it fails the render still works and
     the colorbar PNGs remain in the bundle for manual compositing.
     """
-    colorbars = manifest.get("annotations", {}).get("colorbars", [])
+    annotations = manifest.get("annotations", {})
+    colorbars = annotations.get("colorbars", [])
+    # The exporter can ask for a clean render (the figure draws its own legend).
+    if not annotations.get("overlay_colorbars", True):
+        colorbars = []
     if not colorbars and not add_bloom:
         return
 
