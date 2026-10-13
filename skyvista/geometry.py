@@ -7,7 +7,7 @@ of the visualization, independent of how it looks (appearance).
 
 from abc import ABC
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 
 if TYPE_CHECKING:
     from .cloud_optics import HydrometeorSpecies
@@ -91,6 +91,58 @@ class VectorGeometry(Geometry):
     stride: Optional[Union[int, Dict[str, int]]] = None
     color_by: Optional[str] = None
     mask_by: Optional[str] = None
+
+
+@dataclass
+class StreamlineGeometry(Geometry):
+    """
+    Specifies streamlines traced through a 3-D vector field.
+
+    A streamline is everywhere tangent to the *instantaneous* field, so it
+    shows the flow pattern at one time (not the path a parcel follows over
+    time, which is a trajectory). Its shape depends on the reference frame:
+    a storm's inflow and outflow branches show clearly only in the storm's
+    own frame, which ``frame_velocity`` provides.
+
+    Attributes:
+        u_varname: Variable name for u (x) component
+        v_varname: Variable name for v (y) component
+        w_varname: Variable name for w (z) component
+        seeds: Explicit seed points, an (n, 3) array of data coordinates
+            (x, y, z). None seeds on a lattice of grid points instead.
+        seed_stride: Lattice spacing in grid points when ``seeds`` is None:
+            one int for every axis, or per-axis, e.g. ``{"x": 10, "y": 10,
+            "z": 6}``.
+        seed_mask_by: Boolean (or 0/1) dataset variable; lattice seeds are
+            kept only where it is true (e.g. inside the updraft, or in the
+            boundary-layer inflow). Ignored with explicit ``seeds``.
+        direction: Trace "forward", "backward", or "both" ways from each seed.
+        max_length: Longest streamline (data length units) in each direction.
+        min_length: Drop streamlines shorter than this (data length units),
+            e.g. ones seeded in nearly still air.
+        frame_velocity: (u, v, w) subtracted from the field before tracing,
+            in the field's units: the velocity of the frame the streamlines
+            are drawn in, e.g. the storm motion. None = the grid's frame.
+        color_by: Scalar to color by: "speed" (in the chosen frame), "u", "v"
+            or "w" (ground-relative components), or a dataset variable.
+        point_spacing: Spacing (data units) of the points kept along each
+            streamline for export. VTK's adaptive steps leave thousands of
+            points per line; resampling at about the grid scale keeps every
+            resolved bend. None = half the finest grid spacing.
+    """
+
+    u_varname: str = "UC"
+    v_varname: str = "VC"
+    w_varname: str = "WC"
+    seeds: Optional[Any] = None
+    seed_stride: Union[int, Dict[str, int]] = 10
+    seed_mask_by: Optional[str] = None
+    direction: str = "both"
+    max_length: float = 30000.0
+    min_length: float = 0.0
+    frame_velocity: Optional[Tuple[float, float, float]] = None
+    color_by: str = "speed"
+    point_spacing: Optional[float] = None
 
 
 @dataclass

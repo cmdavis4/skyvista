@@ -828,7 +828,18 @@ def _build_object_entry(
     to a VDB sequence; vector glyphs by default go to per-frame point files that
     Blender instances arrows on.
     """
-    from .varspec import CloudSpec, TrajectorySpec, VectorSpec, VolumeSpec
+    from .varspec import (
+        CloudSpec,
+        StreamlineSpec,
+        TrajectorySpec,
+        VectorSpec,
+        VolumeSpec,
+    )
+
+    if isinstance(spec, StreamlineSpec):
+        return _build_streamline_entry(
+            spec, dataset, times, data_subdir, running_bounds
+        )
 
     if (
         isinstance(spec, TrajectorySpec)
@@ -1056,6 +1067,7 @@ def _write_point_frames(
     data_subdir: Path,
     coloring_mode: str,
     default_label: str,
+    extra_arrays_per_frame: Optional[List[Dict[str, np.ndarray]]] = None,
 ) -> Tuple[Dict[str, Any], str]:
     """
     Bake colors and write one ``.npz`` point file per frame.
@@ -1080,6 +1092,8 @@ def _write_point_frames(
             "instance_color" (colors on instances, e.g. arrows) or
             "vertex_color" (colors on the points themselves, e.g. spheres).
         default_label: Colorbar label when the appearance sets no title.
+        extra_arrays_per_frame: Additional arrays saved in each frame's file
+            (e.g. ``curve_sizes`` for streamlines), one dict per frame.
 
     Returns:
         (manifest material block, path pattern relative to the bundle).
@@ -1128,6 +1142,8 @@ def _write_point_frames(
         }
         if vectors is not None:
             arrays["vectors"] = np.asarray(vectors, dtype=np.float32).reshape(-1, 3)
+        if extra_arrays_per_frame is not None:
+            arrays.update(extra_arrays_per_frame[frame_index])
         np.savez(object_subdir / f"points_{frame_index + 1:04d}.npz", **arrays)
 
     # ---- Manifest material.
@@ -1146,6 +1162,72 @@ def _write_point_frames(
         (object_subdir / "points_####.npz").relative_to(data_subdir.parent)
     )
     return material, path_pattern
+
+
+def _build_streamline_entry(
+    spec: "VarSpec",
+    dataset,
+    times: List[Any],
+    data_subdir: Path,
+    running_bounds: Optional[np.ndarray],
+) -> Tuple[Dict[str, Any], Optional[np.ndarray]]:
+    """
+    Export streamlines as per-frame polylines for Blender to sweep into tubes.
+
+    Each frame's file holds every streamline's points end to end
+    (``positions``), their baked colors, and ``curve_sizes`` (points per
+    streamline, in order). The build script rebuilds them as a Curves object;
+    geometry nodes sweep a round tube of ``tube_radius`` along each curve and,
+    if ``arrow_spacing`` is set, place downstream-pointing cones along it. The
+    points are ordered downstream (see ``StreamlineSpec.polylines``), so the
+    curve tangent is the flow direction.
+    """
+    frame_points = []
+    extra_arrays_per_frame = []
+    for time in times:
+        lines = spec.polylines(dataset, time)
+        if lines:
+            positions = np.concatenate([points for points, _ in lines])
+            color_values = np.concatenate([colors for _, colors in lines])
+            curve_sizes = np.array([len(points) for points, _ in lines], dtype=np.int32)
+        else:
+            positions = np.zeros((0, 3))
+            color_values = np.zeros(0)
+            curve_sizes = np.zeros(0, dtype=np.int32)
+        frame_points.append((positions, None, color_values))
+        extra_arrays_per_frame.append({"curve_sizes": curve_sizes})
+        running_bounds = _accumulate_bounds(running_bounds, positions)
+
+    appearance = spec.appearance
+    material, path_pattern = _write_point_frames(
+        spec.name,
+        appearance,
+        frame_points,
+        data_subdir,
+        coloring_mode="vertex_color",
+        default_label=spec.geometry.color_by,
+        extra_arrays_per_frame=extra_arrays_per_frame,
+    )
+    tube_radius = float(appearance.tube_radius)
+    object_entry = {
+        "name": spec.name,
+        "spec_type": "streamline",
+        "geometry": {
+            "carrier": "polylines",
+            "path_pattern": path_pattern,
+            "n_frames": len(frame_points),
+            "tube_radius": tube_radius,
+            "arrow_spacing": (
+                float(appearance.arrow_spacing)
+                if appearance.arrow_spacing is not None
+                else None
+            ),
+            "arrow_head_radius": tube_radius * appearance.arrow_head_radius_factor,
+            "arrow_head_length": tube_radius * appearance.arrow_head_length_factor,
+        },
+        "material": material,
+    }
+    return object_entry, running_bounds
 
 
 def _build_particle_points_entry(

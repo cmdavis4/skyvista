@@ -364,6 +364,26 @@ class Scene:
         )
         return self.add(ds, spec)
 
+    def add_streamlines(self, ds: xr.Dataset, **kwargs) -> "Scene":
+        """
+        Add streamlines of a 3-D vector field, drawn as tubes.
+
+        Streamlines follow the instantaneous flow at each time; set
+        ``frame_velocity`` (e.g. the storm motion) to draw them in a moving
+        frame. See :func:`skyvista.make_streamlines` for every option
+        (seeding, tracing, coloring, tube radius, direction markers).
+
+        Args:
+            ds: xarray Dataset with the vector components.
+            **kwargs: Passed to :func:`skyvista.make_streamlines`.
+
+        Returns:
+            self (for method chaining)
+        """
+        from .convenience import make_streamlines
+
+        return self.add(ds, make_streamlines(**kwargs))
+
     def add_slice(
         self,
         ds: xr.Dataset,

@@ -57,6 +57,7 @@ from .convenience import (
     make_vectors,
     make_vector,  # Alias for make_vectors
     make_slice,
+    make_streamlines,
     make_trajectory,
 )
 
@@ -71,6 +72,7 @@ from .varspec import (
     CloudSpec,
     VectorSpec,
     SliceSpec,
+    StreamlineSpec,
     TrajectorySpec,
 )
 
@@ -85,6 +87,7 @@ from .geometry import (
     CloudGeometry,
     VectorGeometry,
     SliceGeometry,
+    StreamlineGeometry,
     TrajectoryGeometry,
 )
 
@@ -98,6 +101,7 @@ from .appearance import (
     VolumeAppearance,
     CloudAppearance,
     VectorAppearance,
+    StreamlineAppearance,
     TrajectoryAppearance,
 )
 
@@ -178,6 +182,7 @@ __all__ = [
     "make_volume",
     "make_clouds",
     "make_vectors",
+    "make_streamlines",
     "make_vector",
     "make_slice",
     "make_trajectory",
@@ -187,6 +192,7 @@ __all__ = [
     "VolumeSpec",
     "CloudSpec",
     "VectorSpec",
+    "StreamlineSpec",
     "SliceSpec",
     "TrajectorySpec",
     # Geometry classes
@@ -195,6 +201,7 @@ __all__ = [
     "VolumeGeometry",
     "CloudGeometry",
     "VectorGeometry",
+    "StreamlineGeometry",
     "SliceGeometry",
     "TrajectoryGeometry",
     # Appearance classes
@@ -203,6 +210,7 @@ __all__ = [
     "VolumeAppearance",
     "CloudAppearance",
     "VectorAppearance",
+    "StreamlineAppearance",
     "TrajectoryAppearance",
     # Grid builders
     "COORD_ALIASES",

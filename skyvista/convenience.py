@@ -29,6 +29,7 @@ from .appearance import (
     Appearance,
     CloudAppearance,
     ContourAppearance,
+    StreamlineAppearance,
     TrajectoryAppearance,
     VectorAppearance,
     VolumeAppearance,
@@ -37,6 +38,7 @@ from .geometry import (
     CloudGeometry,
     ContourGeometry,
     SliceGeometry,
+    StreamlineGeometry,
     TrajectoryGeometry,
     VectorGeometry,
     VolumeGeometry,
@@ -46,6 +48,7 @@ from .varspec import (
     CloudSpec,
     ContourSpec,
     SliceSpec,
+    StreamlineSpec,
     TrajectorySpec,
     VarSpec,
     VectorSpec,
@@ -342,6 +345,100 @@ def make_vectors(
         glyph_width=glyph_width,
     )
     return VectorSpec(
+        geometry=geometry,
+        appearance=appearance,
+        name=name,
+        empty_ok=empty_ok,
+        **kwargs,
+    )
+
+
+def make_streamlines(
+    u: str = "UC",
+    v: str = "VC",
+    w: str = "WC",
+    seeds: Optional[Any] = None,
+    seed_stride: Union[int, Dict[str, int]] = 10,
+    seed_mask_by: Optional[str] = None,
+    direction: str = "both",
+    max_length: float = 30000.0,
+    min_length: float = 0.0,
+    frame_velocity: Optional[Tuple[float, float, float]] = None,
+    color_by: str = "speed",
+    point_spacing: Optional[float] = None,
+    # Appearance
+    tube_radius: float = 50.0,
+    arrow_spacing: Optional[float] = None,
+    color: Optional[str] = None,
+    cmap: Optional[str] = None,
+    clim: Optional[Tuple[float, float]] = None,
+    shader: Optional[str] = None,
+    show_scalar_bar: bool = False,
+    scalar_bar_title: Optional[str] = None,
+    # VarSpec base
+    name: Optional[str] = None,
+    empty_ok: bool = False,
+    **kwargs,
+) -> StreamlineSpec:
+    """
+    Create a streamline spec: tubes along the instantaneous flow.
+
+    Args:
+        u, v, w: Variables for the x, y, z components.
+        seeds: Explicit (n, 3) seed points (x, y, z); None seeds a lattice.
+        seed_stride: Lattice spacing in grid points (int, or per-axis dict).
+        seed_mask_by: Boolean variable; lattice seeds only where it is true.
+        direction: "forward", "backward" or "both" from each seed.
+        max_length: Longest streamline (data units) per direction.
+        min_length: Drop streamlines shorter than this (data units).
+        frame_velocity: (u, v, w) of the frame to draw in (e.g. storm motion).
+        color_by: "speed", "u", "v", "w", or a dataset variable.
+        point_spacing: Spacing of exported points along each streamline
+            (data units); None = half the finest grid spacing.
+        tube_radius: Tube radius (data units).
+        arrow_spacing: Distance between downstream-pointing cone markers
+            (data units; Blender only). None draws plain tubes.
+        color: Solid color (instead of a colormap).
+        cmap: Colormap name.
+        clim: Color limits.
+        shader: Blender shader preset (e.g. "self_lit").
+        show_scalar_bar: Show scalar bar.
+        scalar_bar_title: Scalar bar / colorbar title.
+        name: Unique identifier.
+        empty_ok: Don't skip when the mesh is empty.
+        **kwargs: Additional VarSpec kwargs.
+
+    Returns:
+        StreamlineSpec instance.
+
+    Example:
+        >>> spec = make_streamlines(seed_stride=12, color_by="w", cmap="RdBu_r")
+    """
+    geometry = StreamlineGeometry(
+        u_varname=u,
+        v_varname=v,
+        w_varname=w,
+        seeds=seeds,
+        seed_stride=seed_stride,
+        seed_mask_by=seed_mask_by,
+        direction=direction,
+        max_length=max_length,
+        min_length=min_length,
+        frame_velocity=frame_velocity,
+        color_by=color_by,
+        point_spacing=point_spacing,
+    )
+    appearance = StreamlineAppearance(
+        tube_radius=tube_radius,
+        arrow_spacing=arrow_spacing,
+        color=color,
+        cmap=cmap,
+        clim=clim,
+        shader=shader,
+        show_scalar_bar=show_scalar_bar,
+        scalar_bar_title=scalar_bar_title,
+    )
+    return StreamlineSpec(
         geometry=geometry,
         appearance=appearance,
         name=name,

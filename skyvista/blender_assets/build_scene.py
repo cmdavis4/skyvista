@@ -23,6 +23,8 @@ It reads the bundle's ``scene.json`` and assembles a ``.blend``:
 * vector glyphs: per-frame point files (position, vector, color) turned into
   point clouds, on which a geometry-nodes tree instances one arrow per point,
   aligned with and scaled by its vector (see ``make_glyph_node_group``);
+* streamlines: per-frame polylines rebuilt as Curves objects, swept into
+  tubes with downstream-pointing cones (see ``make_streamline_node_group``);
 * a camera (from the manifest, or a sensible default framing the data);
 * render settings (engine, samples, resolution, Standard view transform).
 
@@ -1078,6 +1080,173 @@ def import_point_glyphs(bundle_dir, object_spec, root_empty, frame_start):
     return created
 
 
+def make_streamline_node_group(name, geometry_spec, material):
+    """
+    Geometry nodes that turn streamline curves into tubes with direction cones.
+
+    The curves arrive ordered downstream, so each curve's tangent is the flow
+    direction. The tree::
+
+        tubes:  Curve to Mesh(profile = circle of tube_radius, caps filled)
+        cones:  Curve to Points(every arrow_spacing along each curve)
+                -> Instance on Points(cone, base at the point, tip along +Z;
+                   rotation = Align Rotation to Vector(Z -> tangent))
+                -> Realize Instances
+        Join(tubes, cones) -> Set Material
+
+    Point attributes (the baked "col_data" color) are interpolated onto the
+    tube vertices and the cone points, and realized onto the cones, so one
+    GEOMETRY attribute lookup in the material colors both.
+    """
+    node_group = bpy.data.node_groups.new(f"{name}_streamlines", "GeometryNodeTree")
+    node_group.interface.new_socket(
+        name="Geometry", in_out="INPUT", socket_type="NodeSocketGeometry"
+    )
+    node_group.interface.new_socket(
+        name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry"
+    )
+    nodes = node_group.nodes
+    links = node_group.links
+    group_input = nodes.new("NodeGroupInput")
+    group_input.location = (-900, 0)
+    group_output = nodes.new("NodeGroupOutput")
+    group_output.location = (700, 0)
+
+    # ---- Tubes.
+    profile = nodes.new("GeometryNodeCurvePrimitiveCircle")
+    profile.location = (-650, -150)
+    profile.inputs["Resolution"].default_value = GLYPH_CROSS_SECTION_VERTICES
+    profile.inputs["Radius"].default_value = float(geometry_spec["tube_radius"])
+    tubes = nodes.new("GeometryNodeCurveToMesh")
+    tubes.location = (-400, 0)
+    tubes.inputs["Fill Caps"].default_value = True
+    links.new(group_input.outputs["Geometry"], tubes.inputs["Curve"])
+    links.new(profile.outputs["Curve"], tubes.inputs["Profile Curve"])
+
+    join = nodes.new("GeometryNodeJoinGeometry")
+    join.location = (200, 0)
+    links.new(tubes.outputs["Mesh"], join.inputs["Geometry"])
+
+    # ---- Direction cones every arrow_spacing along each curve.
+    arrow_spacing = geometry_spec.get("arrow_spacing")
+    if arrow_spacing:
+        marker_points = nodes.new("GeometryNodeCurveToPoints")
+        marker_points.location = (-400, -300)
+        marker_points.mode = "LENGTH"
+        marker_points.inputs["Length"].default_value = float(arrow_spacing)
+        links.new(group_input.outputs["Geometry"], marker_points.inputs["Curve"])
+        align = nodes.new("FunctionNodeAlignRotationToVector")
+        align.location = (-200, -450)
+        align.axis = "Z"
+        links.new(marker_points.outputs["Tangent"], align.inputs["Vector"])
+        head_length = float(geometry_spec["arrow_head_length"])
+        cone = nodes.new("GeometryNodeMeshCone")
+        cone.location = (-400, -600)
+        cone.inputs["Vertices"].default_value = GLYPH_CROSS_SECTION_VERTICES
+        cone.inputs["Radius Bottom"].default_value = float(
+            geometry_spec["arrow_head_radius"]
+        )
+        cone.inputs["Radius Top"].default_value = 0.0
+        cone.inputs["Depth"].default_value = head_length
+        # Base at the marker point, tip downstream.
+        cone_base_at_origin = nodes.new("GeometryNodeTransform")
+        cone_base_at_origin.location = (-200, -600)
+        cone_base_at_origin.inputs["Translation"].default_value = (
+            0.0,
+            0.0,
+            head_length / 2,
+        )
+        links.new(cone.outputs["Mesh"], cone_base_at_origin.inputs["Geometry"])
+        markers = nodes.new("GeometryNodeInstanceOnPoints")
+        markers.location = (0, -350)
+        links.new(marker_points.outputs["Points"], markers.inputs["Points"])
+        links.new(cone_base_at_origin.outputs["Geometry"], markers.inputs["Instance"])
+        links.new(align.outputs["Rotation"], markers.inputs["Rotation"])
+        realize = nodes.new("GeometryNodeRealizeInstances")
+        realize.location = (100, -250)
+        links.new(markers.outputs["Instances"], realize.inputs["Geometry"])
+        links.new(realize.outputs["Geometry"], join.inputs["Geometry"])
+
+    set_material = nodes.new("GeometryNodeSetMaterial")
+    set_material.location = (450, 0)
+    set_material.inputs["Material"].default_value = material
+    links.new(join.outputs["Geometry"], set_material.inputs["Geometry"])
+    links.new(set_material.outputs["Geometry"], group_output.inputs["Geometry"])
+    return node_group
+
+
+def make_polyline_curves(name, positions, curve_sizes, colors_srgb):
+    """
+    A Curves datablock with one poly curve per streamline and its colors.
+
+    Colors arrive as sRGB and are linearized, as for glyph points.
+    """
+    import numpy as np
+
+    curves = bpy.data.hair_curves.new(name)
+    curves.add_curves([int(size) for size in curve_sizes])
+    curves.attributes["position"].data.foreach_set(
+        "vector", np.ascontiguousarray(positions, np.float32).ravel()
+    )
+    colors_srgb = np.asarray(colors_srgb, dtype=np.float64)
+    colors_linear = np.where(
+        colors_srgb <= 0.04045,
+        colors_srgb / 12.92,
+        ((colors_srgb + 0.055) / 1.055) ** 2.4,
+    )
+    colors_rgba = np.concatenate(
+        [colors_linear, np.ones((len(colors_linear), 1))], axis=1
+    ).astype(np.float32)
+    color_attribute = curves.attributes.new("col_data", "FLOAT_COLOR", "POINT")
+    color_attribute.data.foreach_set("color", colors_rgba.ravel())
+    return curves
+
+
+def import_polylines(bundle_dir, object_spec, root_empty, frame_start):
+    """
+    Build streamline tubes from a ``polylines`` manifest entry.
+
+    Each frame's file becomes one Curves object carrying the shared
+    streamline geometry-nodes modifier, visible on its own frame only (as for
+    glyph point clouds).
+    """
+    import numpy as np
+
+    geometry = object_spec["geometry"]
+    name = object_spec["name"]
+    n_frames = int(geometry.get("n_frames", 1))
+    frame_end = frame_start + n_frames - 1
+    material = make_surface_material(name, object_spec["material"])
+    node_group = make_streamline_node_group(name, geometry, material)
+
+    collection = bpy.data.collections.new(name)
+    bpy.context.scene.collection.children.link(collection)
+    created = []
+    for frame_offset in range(n_frames):
+        frame = frame_start + frame_offset
+        polyline_path = bundle_dir / geometry["path_pattern"].replace(
+            "####", f"{frame_offset + 1:04d}"
+        )
+        with np.load(polyline_path) as polyline_file:
+            if len(polyline_file["curve_sizes"]) == 0:
+                continue
+            curves = make_polyline_curves(
+                f"{name}_{frame:04d}",
+                polyline_file["positions"],
+                polyline_file["curve_sizes"],
+                polyline_file["colors"],
+            )
+        curves_object = bpy.data.objects.new(f"{name}_{frame:04d}", curves)
+        collection.objects.link(curves_object)
+        parent_keep_local(curves_object, root_empty)
+        modifier = curves_object.modifiers.new("streamlines", "NODES")
+        modifier.node_group = node_group
+        if n_frames > 1:
+            _show_only_on_frame(curves_object, frame, frame_start, frame_end)
+        created.append(curves_object)
+    return created
+
+
 def import_volume_object(bundle_dir, object_spec, root_empty, frame_start, n_frames):
     """Import a VDB sequence as a Volume object and attach its material."""
     geometry = object_spec["geometry"]
@@ -1750,6 +1919,10 @@ def main():
             elif carrier == "vdb_sequence":
                 built_objects += import_volume_object(
                     bundle_dir, object_spec, root_empty, frame_start, n_frames
+                )
+            elif carrier == "polylines":
+                built_objects += import_polylines(
+                    bundle_dir, object_spec, root_empty, frame_start
                 )
             elif carrier == "point_glyphs":
                 built_objects += import_point_glyphs(

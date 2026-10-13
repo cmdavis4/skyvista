@@ -23,6 +23,7 @@ from .appearance import (
     Appearance,
     CloudAppearance,
     ContourAppearance,
+    StreamlineAppearance,
     TrajectoryAppearance,
     VectorAppearance,
     VolumeAppearance,
@@ -32,6 +33,7 @@ from .geometry import (
     ContourGeometry,
     Geometry,
     SliceGeometry,
+    StreamlineGeometry,
     TrajectoryGeometry,
     VectorGeometry,
     VolumeGeometry,
@@ -412,6 +414,207 @@ class VectorSpec(VarSpec):
         glyph_kwargs.update(self.pyvista_create_kwargs)
 
         return grid.glyph(**glyph_kwargs)
+
+
+# Point-data names used while tracing streamlines (internal to StreamlineSpec).
+STREAMLINE_VECTOR_ARRAY = "_streamline_vectors"
+STREAMLINE_COLOR_ARRAY = "_streamline_color"
+
+
+@dataclass
+class StreamlineSpec(VarSpec):
+    """
+    Streamlines of a 3-D vector field, drawn as tubes.
+
+    Streamlines are traced here, in Python, with VTK's stream tracer (a
+    Runge-Kutta 4-5 integrator with adaptive steps) on the model grid. Each
+    resulting polyline is reoriented to run downstream, so anything drawn
+    along it (Blender's direction markers) points the way the air moves. The
+    PyVista renderer draws tubes; the Blender export sends the polylines
+    themselves, and Blender sweeps the tubes and places the markers.
+    """
+
+    geometry: StreamlineGeometry = field(default_factory=StreamlineGeometry)
+    appearance: StreamlineAppearance = field(default_factory=StreamlineAppearance)
+
+    def __post_init__(self):
+        if self.name is None:
+            self.name = f"streamlines_{self.geometry.color_by}"
+
+    def seed_points(self, ds: xr.Dataset) -> np.ndarray:
+        """
+        Seed points (n, 3) in data coordinates.
+
+        Explicit ``geometry.seeds`` are used as given. Otherwise seeds sit on
+        every ``seed_stride``-th grid point, optionally only where
+        ``seed_mask_by`` is true.
+        """
+        from .grids import resolve_coordinates
+
+        geometry = self.geometry
+        if geometry.seeds is not None:
+            return np.asarray(geometry.seeds, dtype=float).reshape(-1, 3)
+        coordinate_names = resolve_coordinates(ds, ["x", "y", "z"])
+        dimension_names = [coordinate_names[axis] for axis in ("x", "y", "z")]
+        # Strided lattice of grid points.
+        stride = geometry.seed_stride
+        strides_by_axis = (
+            dict.fromkeys(("x", "y", "z"), stride)
+            if isinstance(stride, int)
+            else dict(stride)
+        )
+        lattice = ds.isel(
+            {
+                coordinate_names[axis]: slice(None, None, int(axis_stride))
+                for axis, axis_stride in strides_by_axis.items()
+                if coordinate_names.get(axis) in ds.dims
+            }
+        )
+        meshed = np.meshgrid(
+            *[lattice[name].values for name in dimension_names], indexing="ij"
+        )
+        seeds = np.stack([coordinate.ravel() for coordinate in meshed], axis=1)
+        # Optionally keep only seeds where the mask is true.
+        if geometry.seed_mask_by is not None:
+            mask = lattice[geometry.seed_mask_by].transpose(*dimension_names).values
+            seeds = seeds[np.asarray(mask, dtype=bool).ravel()]
+        return seeds
+
+    def trace(self, ds: xr.Dataset, time: Any) -> pv.PolyData:
+        """
+        Trace the streamlines at one time; returns VTK's polyline output.
+
+        The field is first moved into the requested frame (``frame_velocity``
+        subtracted). The coloring scalar travels along as point data, so it
+        is interpolated onto the streamline points by VTK.
+        """
+        geometry = self.geometry
+        ds = select_time(ds, time)
+        grid = build_grid(ds, grid_type=self.grid_type)
+
+        # Components in the requested frame.
+        frame_velocity = geometry.frame_velocity or (0.0, 0.0, 0.0)
+        component_names = (geometry.u_varname, geometry.v_varname, geometry.w_varname)
+        for component_name in component_names:
+            add_scalar_to_grid(grid, ds, component_name)
+        frame_components = [
+            np.asarray(grid[name], dtype=float) - offset
+            for name, offset in zip(component_names, frame_velocity, strict=True)
+        ]
+        grid[STREAMLINE_VECTOR_ARRAY] = np.stack(frame_components, axis=1)
+
+        # The coloring scalar, as point data.
+        color_by = geometry.color_by
+        if color_by == "speed":
+            color_values = np.sqrt(sum(c**2 for c in frame_components))
+        elif color_by in ("u", "v", "w"):
+            color_values = np.asarray(grid[component_names["uvw".index(color_by)]])
+        else:
+            add_scalar_to_grid(grid, ds, color_by)
+            color_values = np.asarray(grid[color_by])
+        grid[STREAMLINE_COLOR_ARRAY] = color_values
+
+        seeds = self.seed_points(ds)
+        if len(seeds) == 0:
+            return pv.PolyData()
+        return grid.streamlines_from_source(
+            pv.PolyData(seeds),
+            vectors=STREAMLINE_VECTOR_ARRAY,
+            integration_direction=geometry.direction,
+            max_length=geometry.max_length,
+            initial_step_length=0.2,
+            max_steps=100000,
+            terminal_speed=1e-3,
+            compute_vorticity=False,
+            **self.pyvista_create_kwargs,
+        )
+
+    def polylines(
+        self, ds: xr.Dataset, time: Any
+    ) -> List["tuple[np.ndarray, np.ndarray]"]:
+        """
+        The streamlines at one time as (points (k, 3), color values (k,)).
+
+        Each polyline is ordered downstream: VTK writes a backward-traced line
+        from the seed upstream, so a line whose point order runs against its
+        own vectors is reversed. Lines shorter than ``min_length`` (or with
+        fewer than two points) are dropped. Each line is then resampled to
+        evenly spaced points (``point_spacing``) by linear interpolation in
+        arc length, with both ends kept.
+        """
+        from carlee_tools import spacing
+
+        from .grids import resolve_coordinates
+
+        # Resampling distance along the lines.
+        point_spacing = self.geometry.point_spacing
+        if point_spacing is None:
+            coordinate_names = resolve_coordinates(ds, ["x", "y", "z"])
+            grid_spacings = [
+                spacing(
+                    ds[coordinate_names[axis]].values, raise_if_not_evenly_spaced=False
+                )
+                for axis in ("x", "y", "z")
+                if ds.sizes.get(coordinate_names.get(axis), 0) > 1
+            ]
+            point_spacing = 0.5 * min(grid_spacings) if grid_spacings else 1.0
+
+        traced = self.trace(ds, time)
+        if traced.n_points == 0:
+            return []
+        points = np.asarray(traced.points)
+        vectors = np.asarray(traced.point_data[STREAMLINE_VECTOR_ARRAY])
+        colors = np.asarray(traced.point_data[STREAMLINE_COLOR_ARRAY])
+        # VTK's line connectivity: [n, i0 ... i(n-1), n, ...].
+        connectivity = np.asarray(traced.lines)
+        result = []
+        cursor = 0
+        while cursor < len(connectivity):
+            n_line_points = int(connectivity[cursor])
+            point_ids = connectivity[cursor + 1 : cursor + 1 + n_line_points]
+            cursor += n_line_points + 1
+            if n_line_points < 2:
+                continue
+            line_points = points[point_ids]
+            segments = np.diff(line_points, axis=0)
+            if np.linalg.norm(segments, axis=1).sum() < self.geometry.min_length:
+                continue
+            # Downstream order: segments should align with the flow.
+            alignment = np.sum(segments * vectors[point_ids][:-1])
+            if alignment < 0:
+                point_ids = point_ids[::-1]
+            line_points = points[point_ids]
+            line_colors = colors[point_ids]
+            # Even resampling in arc length.
+            arc_length = np.concatenate(
+                [[0.0], np.cumsum(np.linalg.norm(np.diff(line_points, axis=0), axis=1))]
+            )
+            n_samples = max(int(np.ceil(arc_length[-1] / point_spacing)) + 1, 2)
+            sample_arc_length = np.linspace(0.0, arc_length[-1], n_samples)
+            resampled_points = np.stack(
+                [
+                    np.interp(sample_arc_length, arc_length, line_points[:, axis])
+                    for axis in range(3)
+                ],
+                axis=1,
+            )
+            resampled_colors = np.interp(sample_arc_length, arc_length, line_colors)
+            result.append((resampled_points, resampled_colors))
+        return result
+
+    def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
+        """Tubes around the traced streamlines, carrying the color scalar."""
+        traced = self.trace(ds, time)
+        if traced.n_points == 0:
+            return pv.PolyData()
+        traced[self.geometry.color_by] = traced.point_data[STREAMLINE_COLOR_ARRAY]
+        return traced.tube(radius=self.appearance.tube_radius)
+
+    def get_pyvista_kwargs(self) -> Dict[str, Any]:
+        kwargs = super().get_pyvista_kwargs()
+        if self.appearance.color is None:
+            kwargs["scalars"] = self.geometry.color_by
+        return kwargs
 
 
 @dataclass

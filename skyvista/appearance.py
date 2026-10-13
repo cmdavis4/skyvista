@@ -175,6 +175,27 @@ class VectorAppearance(Appearance):
 
 
 @dataclass
+class StreamlineAppearance(Appearance):
+    """
+    Appearance of streamlines drawn as tubes.
+
+    Attributes:
+        tube_radius: Tube radius in data length units (e.g. meters).
+        arrow_spacing: Distance (data units) between direction markers -- cone
+            heads along each tube pointing downstream. None draws plain tubes.
+            Markers matter in a still: a bare streamline does not say which
+            way the air moves. Blender only (PyVista draws plain tubes).
+        arrow_head_radius_factor: Cone base radius / tube radius.
+        arrow_head_length_factor: Cone length / tube radius.
+    """
+
+    tube_radius: float = 50.0
+    arrow_spacing: Optional[float] = None
+    arrow_head_radius_factor: float = 3.0
+    arrow_head_length_factor: float = 8.0
+
+
+@dataclass
 class TrajectoryAppearance(Appearance):
     """
     Appearance specific to trajectory rendering.
