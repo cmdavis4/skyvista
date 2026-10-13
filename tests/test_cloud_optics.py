@@ -423,3 +423,23 @@ def test_aerial_perspective_settings_reach_the_manifest(tmp_path):
     assert manifest["world"]["aerial_perspective"] is True
     assert manifest["world"]["visibility_km"] == 80.0
     assert manifest["bounds"] is not None
+
+
+def test_camera_below_the_data_warns(tmp_path):
+    """A negative elevation on a wide, shallow scene puts the camera underground."""
+    x = np.linspace(0.0, 100000.0, 11)
+    z = np.linspace(0.0, 2000.0, 5)
+    dataset = xr.Dataset(
+        {
+            "u": (("z", "y", "x"), np.ones((5, 11, 11))),
+            "v": (("z", "y", "x"), np.zeros((5, 11, 11))),
+            "w": (("z", "y", "x"), np.zeros((5, 11, 11))),
+        },
+        coords={"x": x, "y": x, "z": z},
+    )
+    config = sv.BlenderExportConfig()
+    config.camera.elevation_deg = -10.0
+    with pytest.warns(UserWarning, match="below the lowest exported data"):
+        sv.Scene().add_vectors(dataset, "wind", u="u", v="v", w="w").to_blender(
+            tmp_path / "bundle", config=config
+        )

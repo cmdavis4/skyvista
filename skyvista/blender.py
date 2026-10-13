@@ -2467,6 +2467,20 @@ def _compute_camera_manifest(
             }
         ]
 
+    # A camera below the data almost always means it is under the ground
+    # plane. The elevation angle is measured from the scene's center, so a
+    # large scene puts a slightly negative angle kilometers below it.
+    lowest_camera_height = min(keyframe["location"][2] for keyframe in keyframes)
+    if lowest_camera_height < float(bounds_min[2]):
+        warnings.warn(
+            f"The camera is at z = {lowest_camera_height:.0f}, below the lowest "
+            f"exported data (z = {float(bounds_min[2]):.0f}), so it is probably "
+            "under the ground plane and sees nothing. Raise "
+            "camera.elevation_deg or reduce camera.distance_factor; the "
+            "elevation is measured from the center of the scene.",
+            stacklevel=3,
+        )
+
     return {
         "type": "perspective",
         "lens_mm": camera_config.lens_mm,
