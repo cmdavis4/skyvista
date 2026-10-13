@@ -204,3 +204,12 @@ def test_self_lit_preset_is_exposure_relative():
     assert shader["emission_relative_to_exposure"] is True
     # The default look stays a plain, unlit-by-itself matte surface.
     assert resolve_shader(None)["emission_relative_to_exposure"] is False
+
+
+def test_shader_overrides_replace_preset_fields():
+    appearance = sv.VectorAppearance(
+        shader="self_lit", shader_overrides={"emission_strength": 1.0}
+    )
+    assert appearance.to_blender_material()["shader"]["emission_strength"] == 1.0
+    with pytest.raises(ValueError, match="Unknown shader field"):
+        sv.VectorAppearance(shader_overrides={"glowiness": 2}).to_blender_material()

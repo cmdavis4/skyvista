@@ -99,8 +99,17 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--arrow-width",
         type=float,
-        default=50.0,
+        default=65.0,
         help="Arrow shaft diameter (m); the head scales with it.",
+    )
+    parser.add_argument(
+        "--arrow-self-illumination",
+        type=float,
+        default=1.0,
+        help=(
+            "Share of each arrow's on-screen color that it emits itself"
+            " (0 = lit only by sun and sky); lighting adds shading on top."
+        ),
     )
     parser.add_argument(
         "--w-limit",
@@ -401,8 +410,12 @@ def main() -> None:
         glyph_width=arguments.arrow_width,
         mask_by="show_arrow",
     )
-    # Half self-lit, so an arrow's color reads on its shadowed side too.
+    # Self-lit, so an arrow's color reads on its shadowed side and against
+    # the darker, shaded parts of the cloud.
     arrows.appearance.shader = "self_lit"
+    arrows.appearance.shader_overrides = {
+        "emission_strength": arguments.arrow_self_illumination
+    }
 
     if arguments.cutaway:
         # Remove the camera-side half (y below the plane); physical optics.

@@ -30,6 +30,10 @@ class Appearance:
             the default matte look. See :mod:`skyvista.shaders` for the full set;
             "glow" is the emissive, bloom-haloed NCAR "fountain" look. Ignored by
             the PyVista renderer, which has no equivalent node-based shading.
+        shader_overrides: Values that replace fields of the resolved shader
+            preset, e.g. ``{"emission_strength": 1.0}`` to make a "self_lit"
+            surface fully self-illuminated. Keys must be fields of the preset
+            (see :class:`skyvista.shaders.ShaderPreset`).
     """
 
     color: Optional[str] = None
@@ -39,6 +43,7 @@ class Appearance:
     show_scalar_bar: bool = True
     scalar_bar_title: Optional[str] = None
     shader: Optional[str] = None
+    shader_overrides: Optional[Dict[str, Any]] = None
 
     def to_pyvista_kwargs(self) -> Dict[str, Any]:
         """Convert appearance to PyVista add_mesh kwargs."""
@@ -77,10 +82,18 @@ class Appearance:
         """
         from .shaders import resolve_shader
 
+        shader_block = resolve_shader(self.shader)
+        for key, value in (self.shader_overrides or {}).items():
+            if key not in shader_block:
+                raise ValueError(
+                    f"Unknown shader field {key!r}; valid fields are "
+                    f"{', '.join(sorted(shader_block))}."
+                )
+            shader_block[key] = value
         material: Dict[str, Any] = {
             "type": "surface",
             "opacity": self.opacity,
-            "shader": resolve_shader(self.shader),
+            "shader": shader_block,
         }
         return material
 
