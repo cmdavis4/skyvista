@@ -20,6 +20,9 @@ It reads the bundle's ``scene.json`` and assembles a ``.blend``:
 * physically rendered clouds: a VDB sequence with one extinction grid per
   hydrometeor species, rendered by one Volume Scatter closure per species
   summed in a single shader (see ``make_cloud_material``);
+* vector glyphs: per-frame point files (position, vector, color) turned into
+  point clouds, on which a geometry-nodes tree instances one arrow per point,
+  aligned with and scaled by its vector (see ``make_glyph_node_group``);
 * a camera (from the manifest, or a sensible default framing the data);
 * render settings (engine, samples, resolution, Standard view transform).
 
@@ -289,12 +292,16 @@ def make_surface_material(name, material_spec):
     coloring = material_spec.get("coloring", {})
     color_output_socket = None
     solid_color_value = None
-    if coloring.get("mode") == "vertex_color":
+    if coloring.get("mode") in ("vertex_color", "instance_color"):
         # Read the baked per-vertex color attribute (default "col_data" -- NOT
         # "color", which collides with a reserved attribute in Cycles and
         # renders grey there while EEVEE looks fine).
         attribute_node = node_tree.nodes.new("ShaderNodeAttribute")
         attribute_node.attribute_name = coloring.get("attribute", "col_data")
+        if coloring.get("mode") == "instance_color":
+            # Instanced glyphs carry their color on the instance, copied from
+            # the point they were placed on, not on the arrow mesh's vertices.
+            attribute_node.attribute_type = "INSTANCER"
         attribute_node.location = (-350, 0)
         color_output_socket = attribute_node.outputs["Color"]
     else:
@@ -592,6 +599,241 @@ def import_alembic_object(bundle_dir, object_spec, root_empty):
                 ):
                     modifier.use_vertex_interpolation = False
     return imported
+
+
+# Name of the per-point vector attribute that orients and sizes each glyph.
+GLYPH_VECTOR_ATTRIBUTE = "glyph_vector"
+# Polygon count of the arrow's round cross-section.
+GLYPH_CROSS_SECTION_VERTICES = 20
+
+
+def make_glyph_node_group(name, geometry_spec, material):
+    """
+    Build the geometry-nodes tree that turns a point cloud into vector glyphs.
+
+    Each point carries a vector attribute (``glyph_vector``). The tree::
+
+        unit arrow (shaft cylinder + head cone, length 1 along +Z, tail at 0)
+          -> Set Material
+        Instance on Points:
+          rotation = Align Rotation to Vector(Z axis -> glyph_vector)
+          scale    = length_per_unit * |glyph_vector|   (uniform)
+
+    so every arrow starts at its point, points along the vector, and is
+    ``length_per_unit`` data units long per unit of magnitude. The arrow is
+    scaled uniformly, like PyVista's glyphs, so its proportions are the same
+    for every arrow. Point attributes (the baked "col_data" color) carry over
+    to the instances, where the material reads them as INSTANCER attributes.
+    """
+    node_group = bpy.data.node_groups.new(f"{name}_glyphs", "GeometryNodeTree")
+    node_group.interface.new_socket(
+        name="Geometry", in_out="INPUT", socket_type="NodeSocketGeometry"
+    )
+    node_group.interface.new_socket(
+        name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry"
+    )
+    nodes = node_group.nodes
+    links = node_group.links
+    group_input = nodes.new("NodeGroupInput")
+    group_output = nodes.new("NodeGroupOutput")
+    group_input.location = (-900, 0)
+    group_output.location = (500, 0)
+
+    head_length = float(geometry_spec.get("head_length_fraction", 0.28))
+    head_radius = float(geometry_spec.get("head_radius_fraction", 0.08))
+    shaft_radius = float(geometry_spec.get("shaft_radius_fraction", 0.03))
+    glyph_type = geometry_spec.get("glyph_type", "arrow")
+
+    def translated(geometry_socket, z_offset, location):
+        """Move a primitive (built centered on the origin) up by z_offset."""
+        transform = nodes.new("GeometryNodeTransform")
+        transform.location = location
+        transform.inputs["Translation"].default_value = (0.0, 0.0, z_offset)
+        links.new(geometry_socket, transform.inputs["Geometry"])
+        return transform.outputs["Geometry"]
+
+    # ---- The unit glyph, tail at the origin, tip at z = 1.
+    if glyph_type == "cone":
+        # A single cone spanning the whole length.
+        cone = nodes.new("GeometryNodeMeshCone")
+        cone.location = (-700, -300)
+        cone.inputs["Vertices"].default_value = GLYPH_CROSS_SECTION_VERTICES
+        cone.inputs["Radius Bottom"].default_value = head_radius
+        cone.inputs["Radius Top"].default_value = 0.0
+        cone.inputs["Depth"].default_value = 1.0
+        glyph_geometry = translated(cone.outputs["Mesh"], 0.5, (-500, -300))
+    else:
+        # Shaft: a cylinder from z = 0 to the base of the head.
+        shaft_length = 1.0 - head_length
+        shaft = nodes.new("GeometryNodeMeshCylinder")
+        shaft.location = (-700, -250)
+        shaft.inputs["Vertices"].default_value = GLYPH_CROSS_SECTION_VERTICES
+        shaft.inputs["Radius"].default_value = shaft_radius
+        shaft.inputs["Depth"].default_value = shaft_length
+        shaft_geometry = translated(
+            shaft.outputs["Mesh"], shaft_length / 2, (-500, -250)
+        )
+        # Head: a cone from the end of the shaft to the tip.
+        head = nodes.new("GeometryNodeMeshCone")
+        head.location = (-700, -450)
+        head.inputs["Vertices"].default_value = GLYPH_CROSS_SECTION_VERTICES
+        head.inputs["Radius Bottom"].default_value = head_radius
+        head.inputs["Radius Top"].default_value = 0.0
+        head.inputs["Depth"].default_value = head_length
+        head_geometry = translated(
+            head.outputs["Mesh"], shaft_length + head_length / 2, (-500, -450)
+        )
+        join = nodes.new("GeometryNodeJoinGeometry")
+        join.location = (-300, -350)
+        links.new(shaft_geometry, join.inputs["Geometry"])
+        links.new(head_geometry, join.inputs["Geometry"])
+        glyph_geometry = join.outputs["Geometry"]
+
+    set_material = nodes.new("GeometryNodeSetMaterial")
+    set_material.location = (-100, -350)
+    set_material.inputs["Material"].default_value = material
+    links.new(glyph_geometry, set_material.inputs["Geometry"])
+
+    # ---- Orientation and size from the per-point vector.
+    vector_attribute = nodes.new("GeometryNodeInputNamedAttribute")
+    vector_attribute.location = (-700, 200)
+    vector_attribute.data_type = "FLOAT_VECTOR"
+    vector_attribute.inputs["Name"].default_value = GLYPH_VECTOR_ATTRIBUTE
+    align = nodes.new("FunctionNodeAlignRotationToVector")
+    align.location = (-400, 250)
+    align.axis = "Z"
+    links.new(vector_attribute.outputs["Attribute"], align.inputs["Vector"])
+    magnitude = nodes.new("ShaderNodeVectorMath")
+    magnitude.location = (-400, 100)
+    magnitude.operation = "LENGTH"
+    links.new(vector_attribute.outputs["Attribute"], magnitude.inputs[0])
+    length = nodes.new("ShaderNodeMath")
+    length.location = (-200, 100)
+    length.operation = "MULTIPLY"
+    length.inputs[1].default_value = float(geometry_spec.get("length_per_unit", 1.0))
+    links.new(magnitude.outputs["Value"], length.inputs[0])
+
+    # ---- One glyph per point.
+    instance = nodes.new("GeometryNodeInstanceOnPoints")
+    instance.location = (200, 0)
+    links.new(group_input.outputs["Geometry"], instance.inputs["Points"])
+    links.new(set_material.outputs["Geometry"], instance.inputs["Instance"])
+    links.new(align.outputs["Rotation"], instance.inputs["Rotation"])
+    links.new(length.outputs["Value"], instance.inputs["Scale"])
+    links.new(instance.outputs["Instances"], group_output.inputs["Geometry"])
+    return node_group
+
+
+def make_glyph_point_cloud(name, positions, vectors, colors_srgb):
+    """
+    A vertex-only mesh: one vertex per glyph, with its vector and color.
+
+    Colors arrive as sRGB (matplotlib's output) and are linearized here,
+    because Blender treats float color attributes as scene-linear.
+    """
+    import numpy as np
+
+    mesh = bpy.data.meshes.new(name)
+    mesh.vertices.add(len(positions))
+    mesh.vertices.foreach_set("co", np.ascontiguousarray(positions, np.float32).ravel())
+    vector_attribute = mesh.attributes.new(
+        GLYPH_VECTOR_ATTRIBUTE, "FLOAT_VECTOR", "POINT"
+    )
+    vector_attribute.data.foreach_set(
+        "vector", np.ascontiguousarray(vectors, np.float32).ravel()
+    )
+    # sRGB -> linear, then RGBA.
+    colors_srgb = np.asarray(colors_srgb, dtype=np.float64)
+    colors_linear = np.where(
+        colors_srgb <= 0.04045,
+        colors_srgb / 12.92,
+        ((colors_srgb + 0.055) / 1.055) ** 2.4,
+    )
+    colors_rgba = np.concatenate(
+        [colors_linear, np.ones((len(colors_linear), 1))], axis=1
+    ).astype(np.float32)
+    color_attribute = mesh.attributes.new("col_data", "FLOAT_COLOR", "POINT")
+    color_attribute.data.foreach_set("color", colors_rgba.ravel())
+    mesh.update()
+    return mesh
+
+
+def _show_only_on_frame(blender_object, frame, frame_start, frame_end):
+    """Keyframe render/viewport visibility so the object shows on one frame."""
+    for keyed_frame, hidden in (
+        (frame - 1, True),
+        (frame, False),
+        (frame + 1, True),
+    ):
+        if keyed_frame < frame_start or keyed_frame > frame_end:
+            continue
+        blender_object.hide_render = hidden
+        blender_object.hide_viewport = hidden
+        blender_object.keyframe_insert(data_path="hide_render", frame=keyed_frame)
+        blender_object.keyframe_insert(data_path="hide_viewport", frame=keyed_frame)
+    # Visibility must switch, not blend, between keys.
+    animation_data = blender_object.animation_data
+    if animation_data and animation_data.action:
+        for fcurve in _action_fcurves(animation_data.action):
+            for keyframe_point in fcurve.keyframe_points:
+                keyframe_point.interpolation = "CONSTANT"
+
+
+def _action_fcurves(action):
+    """F-curves of an action, across the layered-action API of Blender 4.4+."""
+    if hasattr(action, "fcurves") and len(action.fcurves):
+        return list(action.fcurves)
+    fcurves = []
+    for layer in getattr(action, "layers", []):
+        for strip in layer.strips:
+            for channelbag in getattr(strip, "channelbags", []):
+                fcurves.extend(channelbag.fcurves)
+    return fcurves
+
+
+def import_point_glyphs(bundle_dir, object_spec, root_empty, frame_start):
+    """
+    Build instanced vector glyphs from a ``point_glyphs`` manifest entry.
+
+    Each frame's ``.npz`` becomes one point-cloud object carrying the shared
+    glyph geometry-nodes modifier; in an animation each object is visible on
+    its own frame only. The glyph arrays are tiny, so one object per frame is
+    simpler and more robust than swapping data from a frame-change handler
+    (which a rendered ``.blend`` would need a registered script for).
+    """
+    import numpy as np
+
+    geometry = object_spec["geometry"]
+    name = object_spec["name"]
+    n_frames = int(geometry.get("n_frames", 1))
+    frame_end = frame_start + n_frames - 1
+    material = make_surface_material(name, object_spec["material"])
+    node_group = make_glyph_node_group(name, geometry, material)
+
+    collection = bpy.data.collections.new(name)
+    bpy.context.scene.collection.children.link(collection)
+    created = []
+    for frame_offset in range(n_frames):
+        frame = frame_start + frame_offset
+        point_path = bundle_dir / geometry["path_pattern"].replace(
+            "####", f"{frame_offset + 1:04d}"
+        )
+        with np.load(point_path) as point_file:
+            mesh = make_glyph_point_cloud(
+                f"{name}_{frame:04d}",
+                point_file["positions"],
+                point_file["vectors"],
+                point_file["colors"],
+            )
+        point_cloud = bpy.data.objects.new(f"{name}_{frame:04d}", mesh)
+        collection.objects.link(point_cloud)
+        parent_keep_local(point_cloud, root_empty)
+        modifier = point_cloud.modifiers.new("glyphs", "NODES")
+        modifier.node_group = node_group
+        if n_frames > 1:
+            _show_only_on_frame(point_cloud, frame, frame_start, frame_end)
+        created.append(point_cloud)
+    return created
 
 
 def import_volume_object(bundle_dir, object_spec, root_empty, frame_start, n_frames):
@@ -1262,6 +1504,10 @@ def main():
             elif carrier == "vdb_sequence":
                 built_objects += import_volume_object(
                     bundle_dir, object_spec, root_empty, frame_start, n_frames
+                )
+            elif carrier == "point_glyphs":
+                built_objects += import_point_glyphs(
+                    bundle_dir, object_spec, root_empty, frame_start
                 )
             else:
                 print(f"  [SKIP] {name}: unknown carrier '{carrier}'")

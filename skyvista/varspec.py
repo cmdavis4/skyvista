@@ -256,30 +256,118 @@ class VectorSpec(VarSpec):
         if self.name is None:
             self.name = f"vector_{self.geometry.varname}"
 
-    def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
+    def subsample(self, ds: xr.Dataset) -> xr.Dataset:
+        """
+        Thin the dataset to the glyph lattice set by ``geometry.stride``.
+
+        A model grid has far more points than arrows a viewer can read, so
+        glyphs are placed on every ``stride``-th grid point. Striding (rather
+        than averaging) keeps each glyph equal to the model value at its own
+        point, so an arrow never shows a wind that no grid point had.
+        """
+        from .grids import resolve_coordinates
+
+        stride = self.geometry.stride
+        if stride is None:
+            return ds
+        coordinate_names = resolve_coordinates(ds, ["x", "y", "z"])
+        # One stride for all axes, or explicit per-axis strides.
+        if isinstance(stride, int):
+            strides_by_axis = dict.fromkeys(("x", "y", "z"), stride)
+        else:
+            strides_by_axis = dict(stride)
+        index_slices = {}
+        for axis, axis_stride in strides_by_axis.items():
+            # Accept either the generic axis name or the dataset's own name.
+            dimension_name = coordinate_names.get(axis, axis)
+            if dimension_name in ds.dims and int(axis_stride) > 1:
+                index_slices[dimension_name] = slice(None, None, int(axis_stride))
+        return ds.isel(index_slices) if index_slices else ds
+
+    def vector_components(self, ds: xr.Dataset) -> List[np.ndarray]:
+        """The (u, v, w) component arrays, flattened in grid (Fortran) order."""
+        return [
+            ds[self.geometry.u_varname].values.ravel(order="F"),
+            ds[self.geometry.v_varname].values.ravel(order="F"),
+            ds[self.geometry.w_varname].values.ravel(order="F"),
+        ]
+
+    def color_scalar_name(self) -> Optional[str]:
+        """Name of the scalar the glyphs are colored by (see ``color_by``)."""
+        return self.geometry.color_by or self.geometry.scale_by
+
+    def color_values(self, ds: xr.Dataset, components: List[np.ndarray]) -> np.ndarray:
+        """
+        Per-glyph values of the coloring scalar, flattened like the components.
+
+        "speed", "u", "v" and "w" are derived from the vector itself; any other
+        name is read from the dataset (e.g. color arrows by temperature).
+        """
+        scalar_name = self.color_scalar_name() or "speed"
+        derived_from_components = {
+            "speed": lambda: np.sqrt(sum(component**2 for component in components)),
+            "u": lambda: components[0],
+            "v": lambda: components[1],
+            "w": lambda: components[2],
+        }
+        if scalar_name in derived_from_components:
+            return derived_from_components[scalar_name]()
+        return ds[scalar_name].values.ravel(order="F")
+
+    def auto_factor(
+        self, ds: xr.Dataset, components: List[np.ndarray]
+    ) -> Optional[float]:
+        """
+        Default glyph length per unit magnitude: longest arrow = half a spacing.
+
+        Uses the spacing of the (already subsampled) glyph lattice, so arrows
+        are sized against the distance to their neighbours rather than to the
+        much finer model grid. Returns None for a field that is zero everywhere.
+        """
         from carlee_tools import spacing
 
         from .grids import resolve_coordinates
 
-        ds = select_time(ds, time)
+        coordinate_names = resolve_coordinates(ds, ["x", "y", "z"])
+        lattice_spacings = []
+        for axis in ("x", "y", "z"):
+            dimension_name = coordinate_names.get(axis)
+            if dimension_name in ds.coords and len(ds[dimension_name]) > 1:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    lattice_spacings.append(
+                        spacing(
+                            ds[dimension_name].values,
+                            raise_if_not_evenly_spaced=False,
+                        )
+                    )
+        maximum_magnitude = float(
+            np.nanmax(np.sqrt(sum(component**2 for component in components)))
+        )
+        if not lattice_spacings or not maximum_magnitude > 0:
+            return None
+        return 0.5 * min(lattice_spacings) / maximum_magnitude
+
+    def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
+        ds = self.subsample(select_time(ds, time))
 
         # Build grid (auto-detects type or uses explicit grid_type)
         grid = build_grid(ds, grid_type=self.grid_type)
 
         # Stack vector components
-        u = ds[self.geometry.u_varname].values.ravel(order="F")
-        v = ds[self.geometry.v_varname].values.ravel(order="F")
-        w = ds[self.geometry.w_varname].values.ravel(order="F")
-
-        vectors = np.vstack([u, v, w]).T
+        components = self.vector_components(ds)
+        vectors = np.vstack(components).T
         vector_name = self.geometry.varname
         grid[vector_name] = vectors
         grid.set_active_vectors(vector_name)
 
         # Add individual components for potential scaling
-        grid["u"] = u
-        grid["v"] = v
-        grid["w"] = w
+        grid["u"], grid["v"], grid["w"] = components
+
+        # Carry the coloring scalar onto the glyphs when one was requested.
+        color_name = self.geometry.color_by
+        if color_name is not None and color_name not in ("u", "v", "w"):
+            grid[color_name] = self.color_values(ds, components)
 
         # Prepare glyph kwargs
         glyph_kwargs = {"orient": vector_name}
@@ -287,28 +375,7 @@ class VectorSpec(VarSpec):
         # Auto-calculate factor if not provided
         factor = self.geometry.factor
         if factor is None:
-            # Use resolved coordinate names
-            coords = resolve_coordinates(ds, ["x", "y", "z"])
-            component_to_dim = {
-                "u": coords["x"],
-                "v": coords["y"],
-                "w": coords["z"],
-            }
-            ratios = []
-            for component, dim in component_to_dim.items():
-                if dim in ds.coords and len(ds[dim]) > 1:
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore")
-                        dim_spacing = spacing(
-                            ds[dim].values, raise_if_not_evenly_spaced=False
-                        )
-                    max_component = np.abs(grid[component]).max()
-                    if max_component > 0:
-                        ratios.append(max_component / dim_spacing)
-            if ratios:
-                max_ratio = max(ratios)
-                factor = 0.5 / max_ratio
-
+            factor = self.auto_factor(ds, components)
         if factor is not None:
             glyph_kwargs["factor"] = factor
 

@@ -312,6 +312,8 @@ class Scene:
         color: Optional[str] = None,
         opacity: float = 1.0,
         cmap: Optional[str] = None,
+        stride: Optional[Union[int, Dict[str, int]]] = None,
+        color_by: Optional[str] = None,
         **kwargs,
     ) -> "Scene":
         """
@@ -324,11 +326,17 @@ class Scene:
             v: Variable for v component
             w: Variable for w component
             scale_by: Variable to scale arrows by
-            factor: Scale factor for glyph size
+            factor: Glyph length per unit of vector magnitude (data units,
+                e.g. meters of arrow per m/s); None = auto
             color: Solid color
             opacity: Opacity (0-1)
             cmap: Colormap name
-            **kwargs: Additional VarSpec kwargs
+            stride: Keep every n-th grid point for glyphs (an int for all
+                axes, or e.g. ``{"x": 8, "z": 8}``)
+            color_by: "speed", "u", "v", "w", or a dataset variable to
+                color the glyphs by
+            **kwargs: Additional ``make_vectors`` / VarSpec kwargs (e.g.
+                ``clim``, ``blender_instancing``)
 
         Returns:
             self (for method chaining)
@@ -345,6 +353,8 @@ class Scene:
             color=color,
             opacity=opacity,
             cmap=cmap,
+            stride=stride,
+            color_by=color_by,
             **kwargs,
         )
         return self.add(ds, spec)

@@ -199,6 +199,13 @@ class BlenderCameraConfig:
         follow_position_vars: (x_var, y_var) giving the tracked feature's
             horizontal position over time, used by "follow" mode. Defaults to
             the storm-tracking convention used elsewhere in skyvista.
+        location: Explicit camera position in data (physical) coordinates.
+            Used together with ``look_at`` for a "static" camera, in place of
+            the automatic placement from the data bounds. Setting both pins
+            the view, so different exports of the same storm (e.g. the panels
+            of a side-by-side figure) are framed identically even when their
+            objects' bounds differ.
+        look_at: The data-space point an explicit camera aims at.
     """
 
     mode: str = "static"
@@ -212,6 +219,8 @@ class BlenderCameraConfig:
         "storm_position_x",
         "storm_position_y",
     )
+    location: Optional[Tuple[float, float, float]] = None
+    look_at: Optional[Tuple[float, float, float]] = None
 
 
 # Named world/lighting looks the build script knows how to construct. Kept here
@@ -792,7 +801,8 @@ def _coloring_scalar_name(spec: "VarSpec") -> Optional[str]:
     if isinstance(spec, TrajectorySpec):
         return geometry.scalar  # may be None -> solid color
     if isinstance(spec, VectorSpec):
-        return geometry.scale_by  # may be None -> fall back to active scalar
+        # color_by, else scale_by; None -> fall back to the active scalar
+        return spec.color_scalar_name()
     return getattr(geometry, "scalar", None) or getattr(geometry, "varname", None)
 
 
@@ -808,11 +818,17 @@ def _build_object_entry(
     Dispatch one spec to the appropriate carrier and return its manifest object
     entry plus the updated running spatial bounds.
 
-    Surface-mesh specs (contour, slice, vector glyphs, trajectory tubes) go to
-    Alembic; volume and cloud specs go to a VDB sequence.
+    Surface-mesh specs (contour, slice, trajectory tubes, and vector glyphs
+    with ``blender_instancing=False``) go to Alembic; volume and cloud specs go
+    to a VDB sequence; vector glyphs by default go to per-frame point files that
+    Blender instances arrows on.
     """
-    from .varspec import CloudSpec, VolumeSpec
+    from .varspec import CloudSpec, VectorSpec, VolumeSpec
 
+    if isinstance(spec, VectorSpec) and spec.appearance.blender_instancing:
+        return _build_vector_points_entry(
+            spec, dataset, times, data_subdir, running_bounds
+        )
     if isinstance(spec, CloudSpec):
         return _build_cloud_entry(spec, dataset, times, data_subdir, running_bounds)
     if isinstance(spec, VolumeSpec):
@@ -933,6 +949,209 @@ def _build_mesh_entry(
             "path": str(alembic_path.relative_to(data_subdir.parent)),
             "object_path": f"/{spec.name}",
             "topology": topology_label,
+        },
+        "material": material,
+    }
+    return object_entry, running_bounds
+
+
+# =============================================================================
+# Vector glyph export (point files, instanced in Blender)
+# =============================================================================
+# Glyph shapes the Blender build script can instance.
+INSTANCED_GLYPH_TYPES = ("arrow", "cone")
+
+# Arrow proportions, as fractions of the arrow's length. The arrow is scaled
+# uniformly with the vector magnitude (like PyVista's glyphs), so these ratios
+# hold for every arrow.
+ARROW_SHAFT_RADIUS_FRACTION = 0.03
+ARROW_HEAD_RADIUS_FRACTION = 0.08
+ARROW_HEAD_LENGTH_FRACTION = 0.28
+
+
+def _rectilinear_glyph_points(
+    spec, dataset_at_time
+) -> Tuple[np.ndarray, List[np.ndarray], np.ndarray]:
+    """
+    Glyph positions, vector components and color values for one time.
+
+    The glyph lattice is the (strided) model grid itself, so positions are the
+    Cartesian product of the x, y and z coordinates, flattened in the same
+    Fortran order as the component arrays. Points where any component is
+    non-finite (masked, below ground, outside the domain) are dropped.
+
+    Returns:
+        (positions (n, 3), [u, v, w] each (n,), color values (n,)).
+    """
+    from .grids import resolve_coordinates
+
+    coordinate_names = resolve_coordinates(dataset_at_time, ["x", "y", "z"])
+    u_variable = dataset_at_time[spec.geometry.u_varname]
+    # The component's own dimension order fixes how the flattening runs, so
+    # build the position grid in exactly that order.
+    axis_by_dimension = {coordinate_names[axis]: axis for axis in ("x", "y", "z")}
+    if set(u_variable.dims) != set(axis_by_dimension):
+        raise NotImplementedError(
+            "Instanced Blender glyphs need vector components on a rectilinear "
+            f"(x, y, z) grid; got dims {u_variable.dims}. Select a single time "
+            "first, or pass blender_instancing=False to bake PyVista glyphs."
+        )
+    coordinate_arrays = [
+        np.asarray(dataset_at_time[dimension].values, dtype=float)
+        for dimension in u_variable.dims
+    ]
+    meshed_coordinates = np.meshgrid(*coordinate_arrays, indexing="ij")
+    positions_by_axis = {
+        axis_by_dimension[dimension]: meshed.ravel(order="F")
+        for dimension, meshed in zip(u_variable.dims, meshed_coordinates, strict=True)
+    }
+    positions = np.stack(
+        [positions_by_axis["x"], positions_by_axis["y"], positions_by_axis["z"]],
+        axis=1,
+    )
+
+    # Components and the coloring scalar, flattened the same way.
+    components = spec.vector_components(dataset_at_time)
+    color_values = np.asarray(
+        spec.color_values(dataset_at_time, components), dtype=float
+    )
+
+    # Drop glyphs with no defined vector.
+    finite = np.isfinite(positions).all(axis=1)
+    for component in components:
+        finite &= np.isfinite(component)
+    return (
+        positions[finite],
+        [np.asarray(component[finite], dtype=float) for component in components],
+        color_values[finite],
+    )
+
+
+def _build_vector_points_entry(
+    spec: "VarSpec",
+    dataset,
+    times: List[Any],
+    data_subdir: Path,
+    running_bounds: Optional[np.ndarray],
+) -> Tuple[Dict[str, Any], Optional[np.ndarray]]:
+    """
+    Export vector glyphs as per-frame point files for instancing in Blender.
+
+    Instead of baking every arrow's triangles (PyVista's glyph filter), each
+    frame stores only what defines a glyph: its position, its vector, and its
+    color. Blender's build script turns each file into a point cloud and a
+    geometry-nodes tree places one arrow per point, aligned with the vector and
+    scaled by ``factor * |vector|``. This keeps files a few numbers per arrow,
+    renders the arrows as cheap instances, and lets the arrow shape, size and
+    density be edited in Blender without re-exporting.
+
+    The point data travels as ``.npz`` (numpy) files, not Alembic: Blender's
+    Alembic importer keeps only vertex colors, so the vectors themselves would
+    be lost. Colors are baked here with one global range, exactly as for
+    meshes, so they are identical across frames and match the colorbar.
+
+    Files: ``data/<name>/points_0001.npz`` ... with arrays ``positions``
+    (data units), ``vectors`` (the field's units) and ``colors`` (sRGB in
+    [0, 1], as matplotlib returns them; the build script linearizes them), all
+    float32 with shape (n, 3).
+    """
+    from .grid_utils import select_time
+
+    appearance = spec.appearance
+    glyph_type = (
+        appearance.glyph_type
+        if appearance.glyph_type in INSTANCED_GLYPH_TYPES
+        else "arrow"
+    )
+
+    # ---- Pass 1: glyph points of every frame + the global color range
+    frame_points = []
+    global_color_min, global_color_max = np.inf, -np.inf
+    length_per_unit = spec.geometry.factor
+    for time in times:
+        dataset_at_time = spec.subsample(select_time(dataset, time))
+        positions, components, color_values = _rectilinear_glyph_points(
+            spec, dataset_at_time
+        )
+        frame_points.append((positions, components, color_values))
+        running_bounds = _accumulate_bounds(running_bounds, positions)
+        if color_values.size:
+            global_color_min = min(global_color_min, float(np.nanmin(color_values)))
+            global_color_max = max(global_color_max, float(np.nanmax(color_values)))
+        # Auto arrow scale from the first frame that has any vector at all, so
+        # one scale (hence comparable lengths) applies to the whole animation.
+        if length_per_unit is None and positions.size:
+            length_per_unit = spec.auto_factor(dataset_at_time, components)
+    if length_per_unit is None:
+        length_per_unit = 1.0
+
+    # ---- Coloring: solid, or a baked colormap over the global range. An
+    # explicit clim is enough by itself: a field that happens to be uniform
+    # still has a meaningful color on a user-chosen scale.
+    uses_scalar_coloring = (
+        appearance.color is None
+        and np.isfinite(global_color_min)
+        and (appearance.clim is not None or global_color_max > global_color_min)
+    )
+    color_limits: Optional[Tuple[float, float]] = None
+    colormap = colormap_name = None
+    if uses_scalar_coloring:
+        color_limits = appearance.clim or (global_color_min, global_color_max)
+        colormap, colormap_name = resolve_colormap(
+            appearance.cmap or DEFAULT_COLORMAP_NAME
+        )
+
+    # ---- Pass 2: write one point file per frame
+    object_subdir = data_subdir / spec.name
+    object_subdir.mkdir(parents=True, exist_ok=True)
+    solid_rgb = None
+    if not uses_scalar_coloring:
+        from matplotlib.colors import to_rgb
+
+        solid_rgb = np.array(to_rgb(appearance.color or "#cccccc"))
+    for frame_index, (positions, components, color_values) in enumerate(frame_points):
+        if uses_scalar_coloring:
+            colors = bake_scalar_to_rgb(color_values, colormap, color_limits)
+        else:
+            colors = np.tile(solid_rgb, (len(positions), 1))
+        np.savez(
+            object_subdir / f"points_{frame_index + 1:04d}.npz",
+            positions=positions.astype(np.float32),
+            vectors=(
+                np.stack(components, axis=1).astype(np.float32)
+                if positions.size
+                else np.zeros((0, 3), dtype=np.float32)
+            ),
+            colors=np.asarray(colors, dtype=np.float32).reshape(-1, 3),
+        )
+
+    # ---- Manifest entry
+    material = appearance.to_blender_material()
+    if uses_scalar_coloring:
+        material["coloring"] = {
+            "mode": "instance_color",
+            "attribute": VERTEX_COLOR_ATTRIBUTE_NAME,
+            "cmap": colormap_name,
+            "clim": list(color_limits),
+            "label": appearance.scalar_bar_title or spec.color_scalar_name() or "speed",
+        }
+    else:
+        material["coloring"] = {"mode": "solid", "color": appearance.color or "#cccccc"}
+
+    object_entry = {
+        "name": spec.name,
+        "spec_type": "vector",
+        "geometry": {
+            "carrier": "point_glyphs",
+            "path_pattern": str(
+                (object_subdir / "points_####.npz").relative_to(data_subdir.parent)
+            ),
+            "n_frames": len(frame_points),
+            "glyph_type": glyph_type,
+            "length_per_unit": float(length_per_unit),
+            "shaft_radius_fraction": ARROW_SHAFT_RADIUS_FRACTION,
+            "head_radius_fraction": ARROW_HEAD_RADIUS_FRACTION,
+            "head_length_fraction": ARROW_HEAD_LENGTH_FRACTION,
         },
         "material": material,
     }
@@ -1761,6 +1980,20 @@ def _compute_camera_manifest(
                     "up": up_vector,
                 }
             )
+
+    explicit_view = (
+        camera_config.location is not None and camera_config.look_at is not None
+    )
+    if not keyframes and explicit_view:
+        # A pinned static view: use the given position and aim point verbatim.
+        keyframes = [
+            {
+                "frame": frame_start,
+                "location": [float(value) for value in camera_config.location],
+                "look_at": [float(value) for value in camera_config.look_at],
+                "up": up_vector,
+            }
+        ]
 
     if not keyframes:
         # Static (also the fallback when follow/orbit produced nothing).

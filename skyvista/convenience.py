@@ -262,6 +262,8 @@ def make_vectors(
     scale_by: Optional[str] = None,
     factor: Optional[float] = None,
     tolerance: Optional[float] = None,
+    stride: Optional[Union[int, Dict[str, int]]] = None,
+    color_by: Optional[str] = None,
     # Appearance
     color: Optional[str] = None,
     opacity: float = 1.0,
@@ -269,6 +271,7 @@ def make_vectors(
     clim: Optional[Tuple[float, float]] = None,
     show_scalar_bar: bool = False,
     glyph_type: str = "arrow",
+    blender_instancing: bool = True,
     # VarSpec base
     name: Optional[str] = None,
     empty_ok: bool = False,
@@ -285,12 +288,17 @@ def make_vectors(
         scale_by: Variable to scale arrows by
         factor: Scale factor for glyph size (None = auto)
         tolerance: Point merging tolerance (0 = no merging)
+        stride: Keep every n-th grid point for glyphs (an int for all axes,
+            or e.g. ``{"x": 8, "z": 8}``)
+        color_by: "speed", "u", "v", "w", or a dataset variable to color by
         color: Solid color
         opacity: Opacity (0.0 to 1.0)
         cmap: Colormap for scalar coloring
         clim: Color limits
         show_scalar_bar: Show scalar bar
         glyph_type: "arrow", "cone", or "sphere"
+        blender_instancing: Blender export instances arrows on exported
+            points (True) or bakes full glyph meshes (False)
         name: Unique identifier
         empty_ok: Don't skip when mesh is empty
         **kwargs: Additional kwargs
@@ -309,6 +317,8 @@ def make_vectors(
         scale_by=scale_by,
         factor=factor,
         tolerance=tolerance,
+        stride=stride,
+        color_by=color_by,
     )
     appearance = VectorAppearance(
         color=color,
@@ -317,6 +327,7 @@ def make_vectors(
         clim=clim,
         show_scalar_bar=show_scalar_bar,
         glyph_type=glyph_type,
+        blender_instancing=blender_instancing,
     )
     return VectorSpec(
         geometry=geometry,

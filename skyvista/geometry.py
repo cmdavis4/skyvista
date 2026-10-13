@@ -7,7 +7,7 @@ of the visualization, independent of how it looks (appearance).
 
 from abc import ABC
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, List, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple, Union
 
 if TYPE_CHECKING:
     from .cloud_optics import HydrometeorSpecies
@@ -63,8 +63,18 @@ class VectorGeometry(Geometry):
         v_varname: Variable name for v (y) component
         w_varname: Variable name for w (z) component
         scale_by: Variable to scale arrows by (None = use vector magnitude)
-        factor: Scale factor for glyph size (None = auto-calculate)
+        factor: Glyph length per unit of vector magnitude, in data length
+            units (e.g. meters of arrow per m/s of wind). None = auto: the
+            longest arrow spans half the spacing between glyphs.
         tolerance: Point merging tolerance (None = default, 0 = no merging)
+        stride: Keep every ``stride``-th grid point for glyphs. One int
+            applies to every spatial dimension; a dict maps dimension names
+            (``{"x": 8, "z": 8}``) to per-dimension strides, with unlisted
+            dimensions kept whole. None keeps every point, which on a model
+            grid is usually far too dense to read.
+        color_by: Scalar to color glyphs by: "speed" (the vector magnitude),
+            "u", "v" or "w" (one component), or the name of a dataset
+            variable. None = color by ``scale_by`` if set, else by speed.
     """
 
     varname: str
@@ -74,6 +84,8 @@ class VectorGeometry(Geometry):
     scale_by: Optional[str] = None
     factor: Optional[float] = None
     tolerance: Optional[float] = None
+    stride: Optional[Union[int, Dict[str, int]]] = None
+    color_by: Optional[str] = None
 
 
 @dataclass

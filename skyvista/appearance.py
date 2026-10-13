@@ -141,10 +141,17 @@ class VectorAppearance(Appearance):
     Appearance specific to vector field glyphs.
 
     Attributes:
-        glyph_type: Type of glyph - "arrow", "cone", "sphere"
+        glyph_type: Type of glyph - "arrow", "cone", "sphere". The Blender
+            export draws "arrow" and "cone"; "sphere" falls back to "arrow".
+        blender_instancing: How the Blender export carries the glyphs. True
+            (default) writes only each glyph's position, vector and color, and
+            Blender instances one arrow per point with geometry nodes, so files
+            stay small and arrow size/shape can be changed in Blender without
+            re-exporting. False bakes PyVista's full glyph meshes into Alembic.
     """
 
     glyph_type: str = "arrow"
+    blender_instancing: bool = True
 
 
 @dataclass
