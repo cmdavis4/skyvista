@@ -2342,30 +2342,34 @@ def main():
             f"{type(compositing_error).__name__}: {compositing_error}"
         )
 
+    # Render output settings are stored in the .blend, so it can be rendered
+    # later or by several processes: ``blender -b file.blend -a``.
+    render_dir = bundle_dir / "render"
+    render_dir.mkdir(parents=True, exist_ok=True)
+    # PNG + alpha so a transparent film (film_transparent) is preserved on
+    # disk; Blender appends the frame number and extension to this prefix.
+    scene.render.image_settings.file_format = "PNG"
+    scene.render.image_settings.color_mode = "RGBA"
+    is_animation = n_frames > 1
+    # Skip frames already on disk, and claim each frame with a placeholder
+    # when it starts. A long animation interrupted part-way then resumes where
+    # it stopped when the same command is run again, and several processes
+    # rendering the same .blend share out the frames between them.
+    scene.render.use_overwrite = False
+    scene.render.use_placeholder = True
+    # An animation appends frame numbers to this prefix itself; a still does
+    # not, so name it after its frame explicitly.
+    scene.render.filepath = (
+        str(render_dir / "frame_")
+        if is_animation
+        else str(render_dir / f"frame_{scene.frame_start:04d}")
+    )
+
     blend_path = bundle_dir / f"{bundle_dir.name}.blend"
     bpy.ops.wm.save_as_mainfile(filepath=str(blend_path))
     print(f"Saved {blend_path}  ({successes} objects, {failures} failed)")
 
     if do_render:
-        render_dir = bundle_dir / "render"
-        render_dir.mkdir(parents=True, exist_ok=True)
-        # PNG + alpha so a transparent film (film_transparent) is preserved on
-        # disk; Blender appends the frame number and extension to this prefix.
-        scene.render.image_settings.file_format = "PNG"
-        scene.render.image_settings.color_mode = "RGBA"
-        is_animation = n_frames > 1
-        # Skip frames already on disk, and claim each frame with a placeholder
-        # when it starts. A long animation interrupted part-way then resumes
-        # where it stopped when the same command is run again.
-        scene.render.use_overwrite = False
-        scene.render.use_placeholder = True
-        # An animation appends frame numbers to this prefix itself; a still
-        # does not, so name it after its frame explicitly.
-        scene.render.filepath = (
-            str(render_dir / "frame_")
-            if is_animation
-            else str(render_dir / f"frame_{scene.frame_start:04d}")
-        )
         bpy.ops.render.render(animation=is_animation, write_still=not is_animation)
         print(f"Rendered {n_frames} frame(s) to {render_dir}")
 

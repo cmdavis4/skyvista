@@ -147,6 +147,8 @@ from .mesh import PVMesh
 from . import presets
 from . import animation
 from . import compose
+from .blender_animation import BlenderAnimation
+from .camera_path import CameraKeyframe, CameraPath, Track
 
 # Blender export configuration (the backend itself is imported lazily by
 # Scene.to_blender so the optional 'alembic3d' dep is only needed on export).
@@ -246,6 +248,10 @@ __all__ = [
     "presets",
     "animation",
     "compose",
+    "BlenderAnimation",
+    "CameraKeyframe",
+    "CameraPath",
+    "Track",
     # Headless rendering setup / diagnostics
     "configure",
     "doctor",
