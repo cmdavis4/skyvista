@@ -157,8 +157,8 @@ def make_figure(arguments, minutes: float, storm_motion: tuple) -> sv.compose.Fi
                         (
                             f"Storm motion ({storm_motion[0]:.1f}, "
                             f"{storm_motion[1]:.1f}) m/s subtracted\n"
-                            f"Cones move with the air, {speed_up:.0f}x real "
-                            "time; one cone spacing = "
+                            f"Cones move with the air, {speed_up:.0f}x real time\n"
+                            "Cone spacing: "
                             f"{arguments.arrow_travel_time:.0f} s of travel"
                         ),
                         anchor="lower left",
