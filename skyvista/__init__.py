@@ -146,6 +146,7 @@ from .plotter import initialize_plotter
 from .mesh import PVMesh
 from . import presets
 from . import animation
+from . import compose
 
 # Blender export configuration (the backend itself is imported lazily by
 # Scene.to_blender so the optional 'alembic3d' dep is only needed on export).
@@ -244,6 +245,7 @@ __all__ = [
     "PVMesh",
     "presets",
     "animation",
+    "compose",
     # Headless rendering setup / diagnostics
     "configure",
     "doctor",
