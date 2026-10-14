@@ -462,9 +462,31 @@ class BlenderAnimation:
         return merged_entry
 
     @staticmethod
-    def _union_bounds(manifests: List[Dict]) -> Optional[List[List[float]]]:
+    def _frame_has_content(manifest: Dict) -> bool:
+        """
+        Whether a frame shows anything.
+
+        A cloud with no condensate yet is exported over the whole (empty)
+        domain, so its bounds and camera describe the domain, not a cloud.
+        Such frames must not size the scene or place a static camera.
+        """
+        for entry in manifest["objects"]:
+            material = entry.get("material", {})
+            if material.get("type") != "cloud" or material.get("species"):
+                return True
+        return False
+
+    def _content_manifests(self, manifests: List[Dict]) -> List[Dict]:
+        """The frames that show something (all of them if none do)."""
+        with_content = [m for m in manifests if self._frame_has_content(m)]
+        return with_content or manifests
+
+    def _union_bounds(self, manifests: List[Dict]) -> Optional[List[List[float]]]:
+        """Bounding box of every frame that shows something."""
         corners = [
-            manifest["bounds"] for manifest in manifests if manifest.get("bounds")
+            manifest["bounds"]
+            for manifest in self._content_manifests(manifests)
+            if manifest.get("bounds")
         ]
         if not corners:
             return None
@@ -495,7 +517,7 @@ class BlenderAnimation:
                 return 0.0
             return float(np.linalg.norm(np.subtract(bounds[1], bounds[0])))
 
-        largest = max(manifests, key=diagonal)
+        largest = max(self._content_manifests(manifests), key=diagonal)
         camera = copy.deepcopy(largest.get("camera"))
         if camera and camera.get("keyframes"):
             camera["keyframes"] = [
