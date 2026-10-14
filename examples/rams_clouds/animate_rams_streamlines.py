@@ -4,7 +4,6 @@ at one output time while cones move along the streamlines with the air.
 
 Example (from the repository root, in the pixi ``blender`` environment)::
 
-    HDF5_PLUGIN_PATH=/path/to/hdf5plugin/plugins \\
     pixi run -e blender python examples/rams_clouds/animate_rams_streamlines.py \\
         /path/to/output/a-L-2000-01-01-013420-g1.h5  streamline_animation \\
         --blender ~/programs/blender-5.0.1-linux-x64/blender --ffmpeg /path/to/ffmpeg

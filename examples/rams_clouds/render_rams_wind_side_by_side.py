@@ -6,7 +6,6 @@ storm core. The cloud in the arrow panel is either thinned (default) or, with
 
 Example (from the repository root, in the pixi ``blender`` environment)::
 
-    HDF5_PLUGIN_PATH=/path/to/hdf5plugin/plugins \\
     pixi run -e blender python examples/rams_clouds/render_rams_wind_side_by_side.py \\
         /path/to/output/a-L-2000-01-01-013420-g1.h5  wind_figure \\
         --blender ~/programs/blender-5.0.1-linux-x64/blender --width 1440

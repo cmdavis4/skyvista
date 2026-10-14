@@ -3,7 +3,6 @@ Render one RAMS output time as a physically based cloud image in Blender.
 
 Example (from the repository root, in the pixi ``blender`` environment)::
 
-    HDF5_PLUGIN_PATH=/path/to/hdf5plugin/plugins \\
     pixi run -e blender python examples/rams_clouds/render_rams_cloud_still.py \\
         /path/to/output/a-L-2000-01-01-013000-g1.h5  storm_bundle \\
         --blender ~/programs/blender-5.0.1-linux-x64/blender

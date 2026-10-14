@@ -14,14 +14,11 @@ onto the cell centres where the hydrometeors live.
 ZFP-compressed output
 ---------------------
 Lite files are often written with the ZFP lossy compressor (HDF5 filter
-32013), which stock HDF5 cannot decode. Either:
-
-* install the ``hdf5plugin`` package in the running environment (importing
-  it registers the filter), or
-* point ``HDF5_PLUGIN_PATH`` at a directory containing the H5Z-ZFP plugin,
-  e.g. the ``plugins`` directory of an ``hdf5plugin`` installed elsewhere.
-  This works with the pixi ``blender`` environment, whose conda HDF5 cannot
-  take ``hdf5plugin`` itself.
+32013), which stock HDF5 cannot decode. The loaders import ``hdf5plugin``,
+which registers the filter. The pixi ``blender`` environment includes it
+(the conda-forge build, linked against the environment's HDF5). Elsewhere,
+either install ``hdf5plugin`` or point ``HDF5_PLUGIN_PATH`` at a directory
+containing the H5Z-ZFP plugin.
 """
 
 import os

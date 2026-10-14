@@ -4,7 +4,6 @@ view with the cloud thinned and the passive tracers shown as colored dye.
 
 Example (from the repository root, in the pixi ``blender`` environment)::
 
-    HDF5_PLUGIN_PATH=/path/to/hdf5plugin/plugins \\
     pixi run -e blender python examples/rams_clouds/render_rams_dye_side_by_side.py \\
         /path/to/output/a-L-2000-01-01-011000-g1.h5  dye_figure \\
         --blender ~/programs/blender-5.0.1-linux-x64/blender

@@ -3,7 +3,6 @@ Render a time-lapse of RAMS clouds with the skyvista Blender backend.
 
 Example (from the repository root, in the pixi ``blender`` environment)::
 
-    HDF5_PLUGIN_PATH=/path/to/hdf5plugin/plugins \\
     pixi run -e blender python examples/rams_clouds/render_rams_cloud_animation.py \\
         /path/to/case/output  storm_animation \\
         --start-minute 42 --end-minute 120 --cadence-seconds 40 \\
