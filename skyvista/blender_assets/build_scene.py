@@ -893,7 +893,7 @@ def make_glyph_node_group(name, geometry_spec, material):
         return node_group
 
     def translated(geometry_socket, z_offset, location):
-        """Move a primitive (built centered on the origin) up by z_offset."""
+        """Move a primitive up by z_offset."""
         transform = nodes.new("GeometryNodeTransform")
         transform.location = location
         transform.inputs["Translation"].default_value = (0.0, 0.0, z_offset)
@@ -909,9 +909,12 @@ def make_glyph_node_group(name, geometry_spec, material):
         cone.inputs["Radius Bottom"].default_value = head_radius
         cone.inputs["Radius Top"].default_value = 0.0
         cone.inputs["Depth"].default_value = 1.0
-        glyph_geometry = translated(cone.outputs["Mesh"], 0.5, (-500, -300))
+        # Mesh Cone already has its base at z = 0.
+        glyph_geometry = cone.outputs["Mesh"]
     else:
-        # Shaft: a cylinder from z = 0 to the base of the head.
+        # Shaft: a cylinder from z = 0 to the base of the head. Mesh
+        # Cylinder is centered on the origin, so it is moved up by half its
+        # length; Mesh Cone already has its base at z = 0.
         shaft_length = 1.0 - head_length
         shaft = nodes.new("GeometryNodeMeshCylinder")
         shaft.location = (-700, -250)
@@ -928,9 +931,7 @@ def make_glyph_node_group(name, geometry_spec, material):
         head.inputs["Radius Bottom"].default_value = head_radius
         head.inputs["Radius Top"].default_value = 0.0
         head.inputs["Depth"].default_value = head_length
-        head_geometry = translated(
-            head.outputs["Mesh"], shaft_length + head_length / 2, (-500, -450)
-        )
+        head_geometry = translated(head.outputs["Mesh"], shaft_length, (-500, -450))
         join = nodes.new("GeometryNodeJoinGeometry")
         join.location = (-300, -350)
         links.new(shaft_geometry, join.inputs["Geometry"])
@@ -1070,18 +1071,11 @@ def _add_constant_width_arrows(nodes, links, points_socket, geometry_spec, mater
     head.inputs["Radius Bottom"].default_value = head_radius
     head.inputs["Radius Top"].default_value = 0.0
     head.inputs["Depth"].default_value = head_length
-    head_base_at_origin = nodes.new("GeometryNodeTransform")
-    head_base_at_origin.location = (-400, -500)
-    head_base_at_origin.inputs["Translation"].default_value = (
-        0.0,
-        0.0,
-        head_length / 2,
-    )
-    links.new(head.outputs["Mesh"], head_base_at_origin.inputs["Geometry"])
+    # Mesh Cone already has its base at z = 0 (Mesh Cylinder is centered).
     head_material = nodes.new("GeometryNodeSetMaterial")
     head_material.location = (-200, -500)
     head_material.inputs["Material"].default_value = material
-    links.new(head_base_at_origin.outputs["Geometry"], head_material.inputs["Geometry"])
+    links.new(head.outputs["Mesh"], head_material.inputs["Geometry"])
     shaft_offset = nodes.new("ShaderNodeVectorMath")
     shaft_offset.operation = "SCALE"
     shaft_offset.location = (200, -100)
