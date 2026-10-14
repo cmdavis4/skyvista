@@ -1469,6 +1469,10 @@ def setup_camera(scene, manifest, transform, all_objects):
             aim_camera(camera_object, location, look_at)
             camera_object.keyframe_insert(data_path="location", frame=frame)
             camera_object.keyframe_insert(data_path="rotation_euler", frame=frame)
+            # A camera path may also animate the focal length.
+            if "lens_mm" in keyframe:
+                camera_data.lens = float(keyframe["lens_mm"])
+                camera_data.keyframe_insert(data_path="lens", frame=frame)
         return camera_object
 
     # Default: frame the combined bounding box of all imported world geometry.
