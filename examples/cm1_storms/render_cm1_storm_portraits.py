@@ -6,8 +6,9 @@ Three storms, each at an informative time in its life cycle:
 * ``ic`` -- isolated deep convection at 40 min, when the tower overshoots
   to its highest (16 km) and the anvil has begun to spread. The tobac
   updraft peak (23:50) comes earlier, while the tower is still growing.
-* ``sl`` -- the squall line at 3 h, its tracking peak, with a mature
-  leading line and a broad trailing stratiform region.
+* ``sl`` -- the squall line at 3 h, its tracking peak, seen from the
+  ground ahead of the line: the row of convective towers under the forward
+  anvil, lit by a low sun that shines in beneath the anvil.
 * ``sc`` -- the right-moving supercell at its tracking peak (1:59:30). The
   domain also holds the left mover and smaller cells, and their anvils merge
   with the right mover's, so the right mover is cut out using the tobac
@@ -149,19 +150,20 @@ STORM_VIEWS = {
         x_range=(180.0e3, 380.0e3),
         # Three copies make a 300 km line, so its ends stay out of frame.
         periodic_y_copies=3,
-        # A mature line's anvil hides its convection from above and below,
-        # so cut it: remove the cloud south of y = 100 km and look north at
-        # the cut face, a cross-section from the trailing stratiform region
-        # (left, west) to the leading towers and forward anvil (right, east).
-        cutaway=((285.0e3, 100.0e3, 0.0), (0.0, -1.0, 0.0)),
-        camera_azimuth_deg=-70.0,
-        camera_horizontal_distance=75.0e3,
-        camera_target_xy=(275.0e3, 100.0e3),
-        camera_height=3000.0,
+        # From the ground, south-east of the line and ahead of it, looking
+        # along it as it recedes north: the row of convective towers under
+        # the forward anvil. The near end (y = 0) lies outside the frame.
+        camera_azimuth_deg=-47.0,
+        camera_horizontal_distance=110.0e3,
+        camera_target_xy=(285.0e3, 110.0e3),
         camera_target_height=6000.0,
         camera_lens_mm=35.0,
-        # From the south-south-west, so the cut face is lit.
-        sun_azimuth_deg=-120.0,
+        # A low sun behind the camera, ahead of the line. The forward anvil
+        # (base ~8 km) overhangs the towers by ~50 km, so a sun higher than
+        # ~9 deg leaves them in its shadow; at 8 deg the light passes under
+        # the anvil onto the towers' camera-facing sides.
+        sun_azimuth_deg=-40.0,
+        sun_elevation_deg=8.0,
         vertical_spacing=125.0,
     ),
     "sc": StormView(
