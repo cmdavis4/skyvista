@@ -225,6 +225,21 @@ class TestDatasetHelpers:
             resolved = resolve_cloud_species(without_number)
         assert resolved[0].number_variable is None
 
+    def test_optional_number_variable_falls_back_silently(self):
+        """Morrison droplets use ndcnst unless ncc is written: no warning."""
+        from skyvista.cloud_optics import cm1_morrison_hydrometeor_species
+
+        morrison_without_ncc = xr.Dataset(
+            {"qc": ("z", [1.0e-3]), "qr": ("z", [1.0e-4]), "ncr": ("z", [1.0e3])}
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            resolved = resolve_cloud_species(
+                morrison_without_ncc, species=cm1_morrison_hydrometeor_species()
+            )
+        assert resolved[0].name == "cloud"
+        assert resolved[0].number_variable is None
+
     def test_standard_atmosphere_density(self):
         density = standard_atmosphere_density(np.array([0.0, 10000.0]))
         np.testing.assert_allclose(density, [1.225, 0.4135], rtol=2e-3)

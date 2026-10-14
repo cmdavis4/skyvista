@@ -224,6 +224,10 @@ class HydrometeorSpecies:
             per kg of air, or None.
         fixed_number_concentration: Constant number per m^3, used when
             ``number_variable`` is None or absent from the dataset.
+        number_variable_optional: The scheme writes ``number_variable`` only
+            in some configurations, so the fixed closure is the expected
+            fallback (e.g. Morrison droplets with a constant ``ndcnst``). No
+            warning is given when the variable is absent.
         fixed_intercept: Constant intercept ``N0`` in m^-(4 + mu), used when
             no number concentration is available.
         phase_function: "henyey_greenstein" (default) or "mie", the Cycles
@@ -254,6 +258,7 @@ class HydrometeorSpecies:
     asymmetry_parameter: float = 0.75
     delta_scale_diffraction: bool = True
     mean_diameter_bounds: Tuple[float, float] = (1.0e-6, 0.05)
+    number_variable_optional: bool = False
 
     def __post_init__(self):
         # The name becomes part of VDB grid names and Blender node labels.
@@ -676,6 +681,8 @@ def cm1_morrison_hydrometeor_species(
             mixing_ratio_variable="qc",
             number_variable="ncc",
             fixed_number_concentration=droplet_number_concentration,
+            # Written only with prognostic droplet number; ndcnst otherwise.
+            number_variable_optional=True,
             mass_coefficient=_sphere_mass_coefficient(997.0),
             mass_exponent=3.0,
             gamma_shape=droplet_gamma_shape,
@@ -887,7 +894,11 @@ def resolve_cloud_species(
                 f"{candidate.number_variable!r} is not in the dataset and no "
                 "fixed_number_concentration or fixed_intercept is set."
             )
-        if candidate.number_variable is not None and number_name is None:
+        if (
+            candidate.number_variable is not None
+            and number_name is None
+            and not candidate.number_variable_optional
+        ):
             warnings.warn(
                 f"Cloud species {candidate.name!r}: number concentration "
                 f"{candidate.number_variable!r} not found; using the fixed "

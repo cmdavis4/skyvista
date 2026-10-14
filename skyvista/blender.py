@@ -2565,6 +2565,7 @@ def export_scene_to_blender(
     build: bool = False,
     render: bool = False,
     blender_executable: Optional[PathLike] = None,
+    quiet: bool = False,
 ) -> Path:
     """
     Export a whole Scene to a self-contained Blender bundle directory.
@@ -2584,6 +2585,8 @@ def export_scene_to_blender(
             same headless Blender run. Implies ``build``.
         blender_executable: Blender command used when ``build``/``render`` is
             True.
+        quiet: Write Blender's console output to ``<bundle>/blender.log``
+            instead of the terminal.
 
     Returns:
         The bundle directory path.
@@ -2757,7 +2760,11 @@ def export_scene_to_blender(
     #      render implies build -- both happen in the one headless Blender run.
     if build or render:
         _launch_blender_build(
-            blender_executable, build_script_path, bundle_dir, render=render
+            blender_executable,
+            build_script_path,
+            bundle_dir,
+            render=render,
+            log_path=bundle_dir / "blender.log" if quiet else None,
         )
 
     return bundle_dir
@@ -2822,6 +2829,7 @@ def _launch_blender_build(
     build_script_path: Path,
     bundle_dir: Path,
     render: bool = False,
+    log_path: Optional[Path] = None,
 ) -> None:
     """
     Run the build script in Blender headlessly.
@@ -2829,6 +2837,11 @@ def _launch_blender_build(
     ``blender --background --python build_scene.py -- <bundle> [--render]``.
     With ``render`` the build also renders the animation to ``<bundle>/render/``.
     ``blender_executable`` is resolved via :func:`_resolve_blender_executable`.
+
+    Blender's console output goes to the terminal, or with ``log_path`` to
+    that file (overwritten). A failed run then raises a ``RuntimeError``
+    whose message ends with the log's last lines, so the cause is visible
+    without opening the file.
     """
     import subprocess
 
@@ -2843,8 +2856,20 @@ def _launch_blender_build(
     ]
     if render:
         command.append("--render")
-    print("Running:", " ".join(command))
-    subprocess.run(command, check=True)
+    if log_path is None:
+        print("Running:", " ".join(command))
+        subprocess.run(command, check=True)
+        return
+
+    with open(log_path, "w") as log_file:
+        completed = subprocess.run(command, stdout=log_file, stderr=subprocess.STDOUT)
+    if completed.returncode != 0:
+        # The end of the log usually holds the error.
+        last_lines = Path(log_path).read_text(errors="replace").splitlines()[-30:]
+        raise RuntimeError(
+            f"Blender exited with code {completed.returncode}; log: {log_path}\n"
+            + "\n".join(last_lines)
+        )
 
 
 def _skyvista_version() -> str:

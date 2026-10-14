@@ -627,8 +627,13 @@ class BlenderAnimation:
             not blend_path.exists()
             or blend_path.stat().st_mtime < manifest_path.stat().st_mtime
         ):
+            # The build's console output goes with the render logs.
+            (self.bundle_dir / "render_logs").mkdir(exist_ok=True)
             _launch_blender_build(
-                executable, self.bundle_dir / "build_scene.py", self.bundle_dir
+                executable,
+                self.bundle_dir / "build_scene.py",
+                self.bundle_dir,
+                log_path=self.bundle_dir / "render_logs" / "build.log",
             )
 
         # Zero-byte files are placeholders of renders that were interrupted.

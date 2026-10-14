@@ -777,6 +777,7 @@ class Scene:
         build: bool = False,
         render: bool = False,
         blender_executable: Optional[PathLike] = None,
+        quiet: bool = False,
     ) -> "Scene":
         """
         Export to a self-contained Blender bundle directory.
@@ -804,6 +805,9 @@ class Scene:
                 ``render``. When None, skyvista resolves it from (in order) the
                 ``SKYVISTA_BLENDER`` environment variable, then ``blender`` on
                 ``PATH``. Pass an explicit path to override both.
+            quiet: Write Blender's console output to ``<path>/blender.log``
+                instead of the terminal (or notebook). A failed run raises an
+                error that ends with the log's last lines.
 
         Returns:
             self (for method chaining)
@@ -818,6 +822,7 @@ class Scene:
             build=build,
             render=render,
             blender_executable=blender_executable,
+            quiet=quiet,
         )
         return self
 
