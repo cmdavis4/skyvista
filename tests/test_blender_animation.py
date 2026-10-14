@@ -6,6 +6,7 @@ Rendering needs Blender and is exercised by the example scripts; the VDB
 """
 
 import json
+import warnings
 
 import numpy as np
 import pytest
@@ -218,3 +219,19 @@ class TestCloudAnimation:
             species["name"] for species in cloud_entry["material"]["species"]
         }
         assert "rain" in species_names
+
+
+def test_camera_below_data_is_checked_once_on_the_kept_camera(tmp_path):
+    # A steeply negative elevation puts every frame's automatic camera
+    # below the data. The frames' own cameras are discarded at assembly, so
+    # export stays silent and assembly warns once, about the camera it keeps.
+    config = sv.BlenderExportConfig()
+    config.camera.elevation_deg = -60.0
+    animation = sv.BlenderAnimation(
+        tmp_path / "animation", FRAME_TIMES, build_wind_frame, config=config
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        animation.export(workers=1)
+    with pytest.warns(UserWarning, match="below the lowest exported data"):
+        animation.assemble()

@@ -67,6 +67,11 @@ _ACTIVE_ANIMATION: Optional["BlenderAnimation"] = None
 _ACTIVE_FIGURE: Optional[Union[Figure, Callable[[FrameContext], Figure]]] = None
 
 
+# Start of the warning Scene.to_blender gives when its automatic camera is
+# below the exported data (see blender._compute_camera_manifest).
+CAMERA_BELOW_DATA_MESSAGE = "The camera is at z = "
+
+
 def default_time_seconds(time: Any) -> float:
     """
     Seconds for a model time given as a number, timedelta or numpy timedelta.
@@ -304,7 +309,12 @@ class BlenderAnimation:
         if frame_dir.exists():
             shutil.rmtree(frame_dir)
         scene = self.build_frame(self.times[frame_index])
-        scene.to_blender(frame_dir, config=self._frame_config(frame_index))
+        with warnings.catch_warnings():
+            # Without a camera path, each frame's automatic camera is replaced
+            # at assembly by the largest frame's, which is checked there.
+            if self.camera_path is None:
+                warnings.filterwarnings("ignore", message=CAMERA_BELOW_DATA_MESSAGE)
+            scene.to_blender(frame_dir, config=self._frame_config(frame_index))
         (frame_dir / FRAME_COMPLETE_MARKER).write_text(
             json.dumps({"time_seconds": self.time_seconds(frame_index)})
         )
@@ -599,6 +609,17 @@ class BlenderAnimation:
             camera["keyframes"] = [
                 {**camera["keyframes"][0], "frame": self.config.frame_start}
             ]
+            # The check each frame's export skipped, on the camera kept.
+            largest_bounds = largest.get("bounds")
+            camera_height = camera["keyframes"][0]["location"][2]
+            if largest_bounds and camera_height < largest_bounds[0][2]:
+                warnings.warn(
+                    f"The camera is at z = {camera_height:.0f}, below the lowest "
+                    f"exported data (z = {largest_bounds[0][2]:.0f}), so it is "
+                    "probably under the ground plane. Raise "
+                    "config.camera.elevation_deg or reduce distance_factor.",
+                    stacklevel=3,
+                )
         return camera
 
     # ----------------------------------------------------------------- render
