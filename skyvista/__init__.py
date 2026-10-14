@@ -147,7 +147,7 @@ from .mesh import PVMesh
 from . import presets
 from . import animation
 from . import compose
-from .blender_animation import BlenderAnimation
+from .blender_animation import BlenderAnimation, encode_video
 from .camera_path import CameraKeyframe, CameraPath, Track
 
 # Blender export configuration (the backend itself is imported lazily by
@@ -250,6 +250,7 @@ __all__ = [
     "animation",
     "compose",
     "BlenderAnimation",
+    "encode_video",
     "CameraKeyframe",
     "CameraPath",
     "Track",

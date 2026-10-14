@@ -196,7 +196,10 @@ class StreamlineAppearance(Appearance):
             the model time of each frame of a ``BlenderAnimation``, or the
             hold clock of a still scene (``BlenderExportConfig.hold``). Keep
             it several times the clock advance per frame, or the motion
-            aliases (markers seem to stand still or run backwards). Blender
+            aliases (markers seem to stand still or run backwards). Where the
+            air is slow, markers come closer than two cone lengths apart; they
+            are shrunk in proportion to the gap there, so they never merge
+            into a solid tube and their size also shows the speed. Blender
             only.
         arrow_minimum_speed: Speed floor (field units, e.g. m/s) used for the
             travel time, so stagnant air does not stall markers forever.

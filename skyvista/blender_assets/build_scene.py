@@ -1308,10 +1308,15 @@ def make_streamline_node_group(name, geometry_spec, material):
 TRAVEL_TIME_ATTRIBUTE = "skyvista_travel_time"
 TRAVEL_TIME_START_ATTRIBUTE = "skyvista_travel_time_start"
 TRAVEL_TIME_END_ATTRIBUTE = "skyvista_travel_time_end"
+SPEED_ATTRIBUTE = "skyvista_speed"
 FLOW_CLOCK_NODE = "skyvista_flow_clock"
 # Moving markers grow over this fraction of the marker travel time after
 # entering a streamline, and shrink over it before leaving, so none pops.
 MARKER_END_FADE_FRACTION = 0.25
+# Moving markers are full size where the gap to the next one (local speed x
+# marker travel time) is at least this many cone lengths, and shrink in
+# proportion below it, so slow air does not pack them into a solid tube.
+MARKER_FULL_SIZE_GAP_IN_CONE_LENGTHS = 2.0
 
 
 def add_streamline_cone(node_group, geometry_spec, location):
@@ -1441,7 +1446,10 @@ def add_moving_streamline_markers(node_group, curves, travel_time_step, spec):
     cone, turned along the saved tangent and scaled down to nothing within
     ``MARKER_END_FADE_FRACTION`` of a step of either curve end, so markers
     grow in at the upstream end and shrink away at the downstream end
-    instead of popping.
+    instead of popping. Markers are also shrunk where the local gap between
+    them (speed x step) is under ``MARKER_FULL_SIZE_GAP_IN_CONE_LENGTHS``
+    cone lengths: slow air would otherwise pack overlapping cones into what
+    looks like a thick tube without markers.
 
     The clock is a Value node named ``FLOW_CLOCK_NODE`` (model seconds),
     keyframed per frame by ``key_flow_clock``.
@@ -1595,6 +1603,13 @@ def add_moving_streamline_markers(node_group, curves, travel_time_step, spec):
         length_along,
         "FLOAT_VECTOR",
     )
+    marker_speed = build.sample_curve_at_length(
+        straight_curves,
+        build.named_attribute(SPEED_ATTRIBUTE),
+        stored_curve,
+        length_along,
+        "FLOAT",
+    )
     marker_color = build.sample_curve_at_length(
         straight_curves,
         build.named_attribute("col_data", "FLOAT_COLOR"),
@@ -1615,11 +1630,20 @@ def add_moving_streamline_markers(node_group, curves, travel_time_step, spec):
     distance_to_nearest_end = build.math(
         "MINIMUM", length_along, build.math("SUBTRACT", stored_end, stored_time)
     )
-    marker_scale = build.math(
+    end_fade_scale = build.math(
         "MINIMUM",
         build.math("MAXIMUM", build.math("DIVIDE", distance_to_nearest_end, fade_time)),
         1.0,
     )
+    # ---- And shrinking where slow air brings markers close together.
+    full_size_gap = MARKER_FULL_SIZE_GAP_IN_CONE_LENGTHS * float(
+        spec["arrow_head_length"]
+    )
+    local_gap = build.math("MULTIPLY", marker_speed, travel_time_step)
+    crowding_scale = build.math(
+        "MINIMUM", build.math("DIVIDE", local_gap, full_size_gap), 1.0
+    )
+    marker_scale = build.math("MINIMUM", end_fade_scale, crowding_scale)
 
     # ---- One cone per marker, turned downstream.
     align = nodes.new("FunctionNodeAlignRotationToVector")
@@ -1662,7 +1686,9 @@ def key_flow_clock(node_group, flow_clock):
                 keyframe_point.interpolation = "LINEAR"
 
 
-def make_polyline_curves(name, positions, curve_sizes, colors_srgb, travel_times=None):
+def make_polyline_curves(
+    name, positions, curve_sizes, colors_srgb, travel_times=None, speeds=None
+):
     """
     A Curves datablock with one poly curve per streamline and its colors.
 
@@ -1670,7 +1696,8 @@ def make_polyline_curves(name, positions, curve_sizes, colors_srgb, travel_times
     times (s from each streamline's seed), when given, become the point
     attribute TRAVEL_TIME_ATTRIBUTE, and each curve's first and last travel
     time become the curve attributes TRAVEL_TIME_START_ATTRIBUTE and
-    TRAVEL_TIME_END_ATTRIBUTE, which the moving markers read.
+    TRAVEL_TIME_END_ATTRIBUTE, which the moving markers read. Speeds become
+    the point attribute SPEED_ATTRIBUTE, which sizes crowded markers.
     """
     import numpy as np
 
@@ -1691,6 +1718,10 @@ def make_polyline_curves(name, positions, curve_sizes, colors_srgb, travel_times
     color_attribute = curves.attributes.new("col_data", "FLOAT_COLOR", "POINT")
     color_attribute.data.foreach_set("color", colors_rgba.ravel())
 
+    if speeds is not None:
+        curves.attributes.new(SPEED_ATTRIBUTE, "FLOAT", "POINT").data.foreach_set(
+            "value", np.asarray(speeds, dtype=np.float32)
+        )
     if travel_times is not None:
         travel_times = np.asarray(travel_times, dtype=np.float32)
         curves.attributes.new(TRAVEL_TIME_ATTRIBUTE, "FLOAT", "POINT").data.foreach_set(
@@ -1749,6 +1780,7 @@ def import_polylines(bundle_dir, object_spec, root_empty, frame_start, flow_cloc
                     if "travel_times" in polyline_file.files
                     else None
                 ),
+                (polyline_file["speeds"] if "speeds" in polyline_file.files else None),
             )
         curves_object = bpy.data.objects.new(f"{name}_{frame:04d}", curves)
         collection.objects.link(curves_object)

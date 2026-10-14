@@ -61,7 +61,7 @@ def test_polylines_run_downstream_and_are_evenly_resampled(vortex_dataset):
     spec = make_vortex_streamlines(min_length=500.0, point_spacing=100.0)
     lines = spec.polylines(vortex_dataset, None)
     assert len(lines) > 10
-    for points, colors, _ in lines:
+    for points, colors, *_ in lines:
         segments = np.diff(points, axis=0)
         # Downstream: steps follow the flow overall.
         assert np.sum(segments * vortex_field(points[:-1])) > 0
@@ -76,7 +76,7 @@ def test_streamlines_follow_the_swirl(vortex_dataset):
     # at a nearly constant radius.
     seeds = np.array([[2000.0, 0.0, 3000.0], [-2500.0, 0.0, 3000.0]])
     spec = make_vortex_streamlines(seeds=seeds, max_length=5000.0)
-    for points, _, _ in spec.polylines(vortex_dataset, None):
+    for points, *_ in spec.polylines(vortex_dataset, None):
         radii = np.hypot(points[:, 0], points[:, 1])
         assert np.ptp(radii) < 0.1 * radii.mean()
 
@@ -154,6 +154,7 @@ def test_travel_times_are_distance_over_speed_from_the_seed():
     expected = (line.points[:, 0] - seed_x) / 5.0
     np.testing.assert_allclose(line.travel_times, expected, atol=1e-3)
     assert np.all(np.diff(line.travel_times) > 0)
+    np.testing.assert_allclose(line.speeds, 5.0, rtol=1e-6)
 
 
 def test_minimum_speed_bounds_travel_time():
@@ -193,6 +194,7 @@ def test_hold_writes_video_frames_and_a_flow_clock(vortex_dataset, tmp_path):
     )
     with np.load(point_path) as polyline_file:
         assert len(polyline_file["travel_times"]) == len(polyline_file["positions"])
+        assert len(polyline_file["speeds"]) == len(polyline_file["positions"])
 
 
 def test_hold_needs_a_single_time(vortex_dataset, tmp_path):

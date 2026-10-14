@@ -1255,9 +1255,10 @@ def _build_streamline_entry(
     points are ordered downstream (see ``StreamlineSpec.polylines``), so the
     curve tangent is the flow direction.
 
-    Each file also holds ``travel_times`` (s from the seed, per point). With
-    ``arrow_travel_time`` set, the build script places the cones at fixed
-    travel times offset by the flow clock instead, so they move with the air.
+    Each file also holds ``travel_times`` (s from the seed) and ``speeds``
+    per point. With ``arrow_travel_time`` set, the build script places the
+    cones at fixed travel times offset by the flow clock instead, so they move
+    with the air, and shrinks them where slow air packs them close together.
     """
     frame_points = []
     extra_arrays_per_frame = []
@@ -1267,17 +1268,20 @@ def _build_streamline_entry(
             positions = np.concatenate([line.points for line in lines])
             color_values = np.concatenate([line.color_values for line in lines])
             travel_times = np.concatenate([line.travel_times for line in lines])
+            speeds = np.concatenate([line.speeds for line in lines])
             curve_sizes = np.array([len(line.points) for line in lines], dtype=np.int32)
         else:
             positions = np.zeros((0, 3))
             color_values = np.zeros(0)
             travel_times = np.zeros(0)
+            speeds = np.zeros(0)
             curve_sizes = np.zeros(0, dtype=np.int32)
         frame_points.append((positions, None, color_values))
         extra_arrays_per_frame.append(
             {
                 "curve_sizes": curve_sizes,
                 "travel_times": travel_times.astype(np.float32),
+                "speeds": speeds.astype(np.float32),
             }
         )
         running_bounds = _accumulate_bounds(running_bounds, positions)

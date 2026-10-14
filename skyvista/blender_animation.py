@@ -86,6 +86,72 @@ def default_time_seconds(time: Any) -> float:
     return float(time)
 
 
+def encode_video(
+    frames_pattern,
+    output_path,
+    fps: float,
+    start_number: int = 1,
+    repeat: int = 1,
+    crf: int = 20,
+    ffmpeg: Optional[str] = None,
+) -> Optional[Path]:
+    """
+    Encode numbered frames to an H.264 MP4 that plays everywhere.
+
+    The frames are padded to even dimensions and stored as yuv420p, which most
+    players require. ``repeat`` plays the whole sequence that many times in a
+    row, e.g. to lengthen a seamless loop (such as a hold whose clock advance
+    is a whole number of marker travel times) without rendering it again.
+
+    Args:
+        frames_pattern: printf-style frame path, e.g. ``render/frame_%04d.png``.
+        output_path: Destination video.
+        fps: Frame rate.
+        start_number: Number of the first frame.
+        repeat: Times the sequence is played.
+        crf: x264 quality (lower is better; 18-23 is typical).
+        ffmpeg: ffmpeg executable (see :func:`find_ffmpeg`).
+
+    Returns:
+        The video path, or None if no ffmpeg was found.
+    """
+    executable = find_ffmpeg(ffmpeg)
+    if executable is None:
+        print("No ffmpeg found; pass ffmpeg=... or set SKYVISTA_FFMPEG.")
+        return None
+    output_path = Path(output_path)
+    command = [
+        executable,
+        "-y",
+        "-loglevel",
+        "error",
+        # Extra passes through the input, before it is opened.
+        "-stream_loop",
+        str(max(int(repeat), 1) - 1),
+        "-framerate",
+        str(fps),
+        "-start_number",
+        str(start_number),
+        "-i",
+        str(frames_pattern),
+        # yuv420p (needed by most players) requires even dimensions.
+        "-vf",
+        "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p",
+        "-c:v",
+        "libx264",
+        "-crf",
+        str(crf),
+        "-preset",
+        "slow",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+    subprocess.run(command, check=True)
+    print(f"Video: {output_path}", flush=True)
+    return output_path
+
+
 def find_ffmpeg(explicit: Optional[str] = None) -> Optional[str]:
     """
     An ffmpeg executable, or None.
@@ -687,46 +753,20 @@ class BlenderAnimation:
         Returns:
             The video path, or None if no ffmpeg was found.
         """
-        executable = find_ffmpeg(ffmpeg)
-        if executable is None:
-            print("No ffmpeg found; pass ffmpeg=... or set SKYVISTA_FFMPEG.")
-            return None
         if source == "composed":
             frames_pattern = self.composed_dir / "frame_%04d.png"
             start_number = 1
         else:
             frames_pattern = self.render_dir / "frame_%04d.png"
             start_number = self.config.frame_start
-        output_path = Path(
-            output_path or self.output_dir / f"{self.output_dir.name}.mp4"
+        return encode_video(
+            frames_pattern,
+            output_path or self.output_dir / f"{self.output_dir.name}.mp4",
+            fps=fps or self.fps,
+            start_number=start_number,
+            crf=crf,
+            ffmpeg=ffmpeg,
         )
-        command = [
-            executable,
-            "-y",
-            "-loglevel",
-            "error",
-            "-framerate",
-            str(fps or self.fps),
-            "-start_number",
-            str(start_number),
-            "-i",
-            str(frames_pattern),
-            # yuv420p (needed by most players) requires even dimensions.
-            "-vf",
-            "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p",
-            "-c:v",
-            "libx264",
-            "-crf",
-            str(crf),
-            "-preset",
-            "slow",
-            "-movflags",
-            "+faststart",
-            str(output_path),
-        ]
-        subprocess.run(command, check=True)
-        print(f"Video: {output_path}", flush=True)
-        return output_path
 
     # -------------------------------------------------------------- all of it
     def run(

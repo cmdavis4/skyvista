@@ -434,11 +434,14 @@ class StreamlinePolyline(NamedTuple):
             air moving with the field takes to reach each point from the
             streamline's seed: negative upstream of the seed, positive
             downstream, increasing along the line.
+        speeds: (k,) flow speed in the streamlines' frame at each point,
+            floored at ``arrow_minimum_speed`` like the travel times.
     """
 
     points: np.ndarray
     color_values: np.ndarray
     travel_times: np.ndarray
+    speeds: np.ndarray
 
 
 @dataclass
@@ -642,7 +645,8 @@ class StreamlineSpec(VarSpec):
             if arc_length[-1] < self.geometry.min_length:
                 continue
             # Travel time: trapezoidal integral of ds / speed, zero at the seed.
-            inverse_speeds = 1.0 / speeds[point_ids]
+            line_speeds = speeds[point_ids]
+            inverse_speeds = 1.0 / line_speeds
             segment_times = (
                 segment_lengths * 0.5 * (inverse_speeds[:-1] + inverse_speeds[1:])
             )
@@ -662,9 +666,13 @@ class StreamlineSpec(VarSpec):
             resampled_travel_times = np.interp(
                 sample_arc_length, arc_length, travel_times
             )
+            resampled_speeds = np.interp(sample_arc_length, arc_length, line_speeds)
             result.append(
                 StreamlinePolyline(
-                    resampled_points, resampled_colors, resampled_travel_times
+                    resampled_points,
+                    resampled_colors,
+                    resampled_travel_times,
+                    resampled_speeds,
                 )
             )
         return result
