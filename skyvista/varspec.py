@@ -12,7 +12,7 @@ requires creating a new VarSpec subclass, not modifying the Scene.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Union
 import warnings
 
 import numpy as np
@@ -423,6 +423,24 @@ STREAMLINE_VECTOR_ARRAY = "_streamline_vectors"
 STREAMLINE_COLOR_ARRAY = "_streamline_color"
 
 
+class StreamlinePolyline(NamedTuple):
+    """
+    One exported streamline, ordered downstream.
+
+    Attributes:
+        points: (k, 3) positions, evenly spaced in arc length.
+        color_values: (k,) coloring scalar at each point.
+        travel_times: (k,) time (s, for lengths in m and speeds in m/s) that
+            air moving with the field takes to reach each point from the
+            streamline's seed: negative upstream of the seed, positive
+            downstream, increasing along the line.
+    """
+
+    points: np.ndarray
+    color_values: np.ndarray
+    travel_times: np.ndarray
+
+
 @dataclass
 class StreamlineSpec(VarSpec):
     """
@@ -531,18 +549,28 @@ class StreamlineSpec(VarSpec):
             **self.pyvista_create_kwargs,
         )
 
-    def polylines(
-        self, ds: xr.Dataset, time: Any
-    ) -> List["tuple[np.ndarray, np.ndarray]"]:
+    def polylines(self, ds: xr.Dataset, time: Any) -> List[StreamlinePolyline]:
         """
-        The streamlines at one time as (points (k, 3), color values (k,)).
+        The streamlines at one time, each ordered downstream and resampled.
 
         Each polyline is ordered downstream: VTK writes a backward-traced line
         from the seed upstream, so a line whose point order runs against its
-        own vectors is reversed. Lines shorter than ``min_length`` (or with
-        fewer than two points) are dropped. Each line is then resampled to
-        evenly spaced points (``point_spacing``) by linear interpolation in
-        arc length, with both ends kept.
+        own vectors is reversed. Traced both ways, a seed gives VTK two lines
+        that meet at the seed; they are joined into one streamline (upstream
+        half, then downstream half), so nothing drawn along it (a tube cap, a
+        marker fading at a line end) marks the seed. Lines shorter than
+        ``min_length`` (or with fewer than two points) are dropped. Each line
+        is then resampled to evenly spaced points (``point_spacing``) by
+        linear interpolation in arc length, with both ends kept.
+
+        Each line also carries its travel time: the integral of ds / speed
+        along it, measured from the seed. VTK starts every line (forward or
+        backward) at its seed, so the seed is the line's first point before
+        any reversal. Anchoring at the seed keeps animated markers (which sit
+        at fixed travel times, see ``StreamlineAppearance.arrow_travel_time``)
+        in step between frames of an animation whose seeds stay put. Speeds
+        below ``appearance.arrow_minimum_speed`` are raised to it, so the
+        travel time stays finite where the air is nearly still.
         """
         from carlee_tools import spacing
 
@@ -567,30 +595,60 @@ class StreamlineSpec(VarSpec):
         points = np.asarray(traced.points)
         vectors = np.asarray(traced.point_data[STREAMLINE_VECTOR_ARRAY])
         colors = np.asarray(traced.point_data[STREAMLINE_COLOR_ARRAY])
+        # Speed in the streamlines' frame, floored so travel times stay finite.
+        speeds = np.maximum(
+            np.linalg.norm(vectors, axis=1), self.appearance.arrow_minimum_speed
+        )
         # VTK's line connectivity: [n, i0 ... i(n-1), n, ...].
         connectivity = np.asarray(traced.lines)
-        result = []
+        seed_ids = np.asarray(traced.cell_data["SeedIds"])
+
+        # ---- Each traced half in downstream order, with the position of its
+        # seed (VTK starts every half at its seed), grouped by seed.
+        halves_by_seed: Dict[int, List["tuple[np.ndarray, int]"]] = {}
         cursor = 0
+        cell_index = 0
         while cursor < len(connectivity):
             n_line_points = int(connectivity[cursor])
             point_ids = connectivity[cursor + 1 : cursor + 1 + n_line_points]
             cursor += n_line_points + 1
+            seed_id = int(seed_ids[cell_index])
+            cell_index += 1
             if n_line_points < 2:
                 continue
-            line_points = points[point_ids]
-            segments = np.diff(line_points, axis=0)
-            if np.linalg.norm(segments, axis=1).sum() < self.geometry.min_length:
-                continue
-            # Downstream order: segments should align with the flow.
-            alignment = np.sum(segments * vectors[point_ids][:-1])
-            if alignment < 0:
+            # Downstream order: segments should align with the flow. A
+            # reversed half has its seed last.
+            segments = np.diff(points[point_ids], axis=0)
+            seed_position = 0
+            if np.sum(segments * vectors[point_ids][:-1]) < 0:
                 point_ids = point_ids[::-1]
+                seed_position = n_line_points - 1
+            halves_by_seed.setdefault(seed_id, []).append((point_ids, seed_position))
+
+        # ---- One streamline per seed where its two halves meet there.
+        joined_lines = [
+            line
+            for halves in halves_by_seed.values()
+            for line in self._join_halves(halves)
+        ]
+
+        result = []
+        for point_ids, seed_position in joined_lines:
             line_points = points[point_ids]
             line_colors = colors[point_ids]
-            # Even resampling in arc length.
-            arc_length = np.concatenate(
-                [[0.0], np.cumsum(np.linalg.norm(np.diff(line_points, axis=0), axis=1))]
+            # Arc length along the line, from its upstream end.
+            segment_lengths = np.linalg.norm(np.diff(line_points, axis=0), axis=1)
+            arc_length = np.concatenate([[0.0], np.cumsum(segment_lengths)])
+            if arc_length[-1] < self.geometry.min_length:
+                continue
+            # Travel time: trapezoidal integral of ds / speed, zero at the seed.
+            inverse_speeds = 1.0 / speeds[point_ids]
+            segment_times = (
+                segment_lengths * 0.5 * (inverse_speeds[:-1] + inverse_speeds[1:])
             )
+            travel_times = np.concatenate([[0.0], np.cumsum(segment_times)])
+            travel_times -= travel_times[seed_position]
+            # Even resampling in arc length.
             n_samples = max(int(np.ceil(arc_length[-1] / point_spacing)) + 1, 2)
             sample_arc_length = np.linspace(0.0, arc_length[-1], n_samples)
             resampled_points = np.stack(
@@ -601,8 +659,47 @@ class StreamlineSpec(VarSpec):
                 axis=1,
             )
             resampled_colors = np.interp(sample_arc_length, arc_length, line_colors)
-            result.append((resampled_points, resampled_colors))
+            resampled_travel_times = np.interp(
+                sample_arc_length, arc_length, travel_times
+            )
+            result.append(
+                StreamlinePolyline(
+                    resampled_points, resampled_colors, resampled_travel_times
+                )
+            )
         return result
+
+    @staticmethod
+    def _join_halves(
+        halves: List["tuple[np.ndarray, int]"],
+    ) -> List["tuple[np.ndarray, int]"]:
+        """
+        Join one seed's traced halves into downstream-ordered streamlines.
+
+        Each half arrives ordered downstream with the position of the seed in
+        it: 0 for the half traced downstream of the seed, the last point for
+        the half traced upstream (VTK started it at the seed, then it was
+        reversed). One of each becomes a single line: the upstream half, then
+        the downstream half without its first point, the seed both share.
+        Anything else (a lone half, or two halves of the same kind, as at a
+        stagnation point) is returned unchanged.
+
+        Args:
+            halves: (point indices, seed position) per half.
+
+        Returns:
+            (point indices, seed position) per streamline.
+        """
+        if len(halves) != 2:
+            return list(halves)
+        ending_at_seed = [half for half in halves if half[1] == len(half[0]) - 1]
+        starting_at_seed = [half for half in halves if half[1] == 0]
+        if len(ending_at_seed) != 1 or len(starting_at_seed) != 1:
+            return list(halves)
+        upstream_ids, upstream_seed_position = ending_at_seed[0]
+        downstream_ids, _ = starting_at_seed[0]
+        joined_ids = np.concatenate([upstream_ids, downstream_ids[1:]])
+        return [(joined_ids, upstream_seed_position)]
 
     def create_mesh(self, ds: xr.Dataset, time: Any) -> Optional[pv.DataSet]:
         """Tubes around the traced streamlines, carrying the color scalar."""

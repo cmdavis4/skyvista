@@ -155,6 +155,7 @@ from .camera_path import CameraKeyframe, CameraPath, Track
 from .blender import (
     BlenderCameraConfig,
     BlenderExportConfig,
+    BlenderHoldConfig,
     BlenderRenderConfig,
     BlenderTransform,
 )
@@ -259,6 +260,7 @@ __all__ = [
     # Blender export
     "BlenderCameraConfig",
     "BlenderExportConfig",
+    "BlenderHoldConfig",
     "BlenderRenderConfig",
     "BlenderTransform",
     "load_example_storm_data",

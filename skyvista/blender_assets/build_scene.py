@@ -25,6 +25,8 @@ It reads the bundle's ``scene.json`` and assembles a ``.blend``:
   aligned with and scaled by its vector (see ``make_glyph_node_group``);
 * streamlines: per-frame polylines rebuilt as Curves objects, swept into
   tubes with downstream-pointing cones (see ``make_streamline_node_group``);
+  with ``arrow_travel_time`` the cones move with the air as the manifest's
+  flow clock advances (see ``add_moving_streamline_markers``);
 * a camera (from the manifest, or a sensible default framing the data);
 * render settings (engine, samples, resolution, Standard view transform).
 
@@ -1266,9 +1268,19 @@ def make_streamline_node_group(name, geometry_spec, material):
     join.location = (200, 0)
     links.new(tubes.outputs["Mesh"], join.inputs["Geometry"])
 
-    # ---- Direction cones every arrow_spacing along each curve.
+    # ---- Direction cones: moving with the flow clock, or fixed every
+    # arrow_spacing along each curve.
     arrow_spacing = geometry_spec.get("arrow_spacing")
-    if arrow_spacing:
+    arrow_travel_time = geometry_spec.get("arrow_travel_time")
+    if arrow_travel_time:
+        moving_markers = add_moving_streamline_markers(
+            node_group,
+            group_input.outputs["Geometry"],
+            float(arrow_travel_time),
+            geometry_spec,
+        )
+        links.new(moving_markers, join.inputs["Geometry"])
+    elif arrow_spacing:
         marker_points = nodes.new("GeometryNodeCurveToPoints")
         marker_points.location = (-400, -300)
         marker_points.mode = "LENGTH"
@@ -1278,28 +1290,11 @@ def make_streamline_node_group(name, geometry_spec, material):
         align.location = (-200, -450)
         align.axis = "Z"
         links.new(marker_points.outputs["Tangent"], align.inputs["Vector"])
-        head_length = float(geometry_spec["arrow_head_length"])
-        cone = nodes.new("GeometryNodeMeshCone")
-        cone.location = (-400, -600)
-        cone.inputs["Vertices"].default_value = GLYPH_CROSS_SECTION_VERTICES
-        cone.inputs["Radius Bottom"].default_value = float(
-            geometry_spec["arrow_head_radius"]
-        )
-        cone.inputs["Radius Top"].default_value = 0.0
-        cone.inputs["Depth"].default_value = head_length
-        # Base at the marker point, tip downstream.
-        cone_base_at_origin = nodes.new("GeometryNodeTransform")
-        cone_base_at_origin.location = (-200, -600)
-        cone_base_at_origin.inputs["Translation"].default_value = (
-            0.0,
-            0.0,
-            head_length / 2,
-        )
-        links.new(cone.outputs["Mesh"], cone_base_at_origin.inputs["Geometry"])
+        cone = add_streamline_cone(node_group, geometry_spec, (-400, -600))
         markers = nodes.new("GeometryNodeInstanceOnPoints")
         markers.location = (0, -350)
         links.new(marker_points.outputs["Points"], markers.inputs["Points"])
-        links.new(cone_base_at_origin.outputs["Geometry"], markers.inputs["Instance"])
+        links.new(cone, markers.inputs["Instance"])
         links.new(align.outputs["Rotation"], markers.inputs["Rotation"])
         realize = nodes.new("GeometryNodeRealizeInstances")
         realize.location = (100, -250)
@@ -1314,11 +1309,374 @@ def make_streamline_node_group(name, geometry_spec, material):
     return node_group
 
 
-def make_polyline_curves(name, positions, curve_sizes, colors_srgb):
+# Names of the travel-time attributes on streamline curves (written by
+# make_polyline_curves) and of the flow-clock node in the streamline tree.
+TRAVEL_TIME_ATTRIBUTE = "skyvista_travel_time"
+TRAVEL_TIME_START_ATTRIBUTE = "skyvista_travel_time_start"
+TRAVEL_TIME_END_ATTRIBUTE = "skyvista_travel_time_end"
+FLOW_CLOCK_NODE = "skyvista_flow_clock"
+# Moving markers grow over this fraction of the marker travel time after
+# entering a streamline, and shrink over it before leaving, so none pops.
+MARKER_END_FADE_FRACTION = 0.25
+
+
+def add_streamline_cone(node_group, geometry_spec, location):
+    """
+    A direction cone, base at the origin and tip along +Z; returns its socket.
+
+    The cone is ``arrow_head_length`` long with a base of
+    ``arrow_head_radius``, so an instance placed on a streamline point with
+    +Z turned along the tangent starts at that point and points downstream.
+    Blender's Mesh Cone already has its base at z = 0 (unlike Mesh Cylinder,
+    which is centered on the origin), so no offset is needed.
+    """
+    cone = node_group.nodes.new("GeometryNodeMeshCone")
+    cone.location = location
+    cone.inputs["Vertices"].default_value = GLYPH_CROSS_SECTION_VERTICES
+    cone.inputs["Radius Bottom"].default_value = float(
+        geometry_spec["arrow_head_radius"]
+    )
+    cone.inputs["Radius Top"].default_value = 0.0
+    cone.inputs["Depth"].default_value = float(geometry_spec["arrow_head_length"])
+    return cone.outputs["Mesh"]
+
+
+class _NodeBuilder:
+    """
+    Small helpers for wiring math-heavy geometry-node graphs from Python.
+
+    Each method creates one node, connects its inputs (an input may be a
+    socket, which is linked, or a plain number, which is set as the default)
+    and returns the output socket, so a graph reads like the formula it
+    computes. Nodes are laid out left to right in creation order.
+    """
+
+    def __init__(self, node_group, origin):
+        self.nodes = node_group.nodes
+        self.links = node_group.links
+        self.x, self.y = origin
+        self.column = 0
+
+    def _place(self, node):
+        node.location = (self.x + 180 * self.column, self.y - 40 * (self.column % 6))
+        self.column += 1
+        return node
+
+    def _connect(self, socket, value):
+        if hasattr(value, "is_output"):
+            self.links.new(value, socket)
+        else:
+            socket.default_value = value
+
+    def math(self, operation, first, second=0.0):
+        """Float math: ``operation(first, second)``."""
+        node = self._place(self.nodes.new("ShaderNodeMath"))
+        node.operation = operation
+        self._connect(node.inputs[0], first)
+        self._connect(node.inputs[1], second)
+        return node.outputs[0]
+
+    def named_attribute(self, name, data_type="FLOAT"):
+        """A named attribute of the geometry being evaluated."""
+        node = self._place(self.nodes.new("GeometryNodeInputNamedAttribute"))
+        node.data_type = data_type
+        node.inputs["Name"].default_value = name
+        return node.outputs["Attribute"]
+
+    def store(self, geometry, name, value, data_type="FLOAT", domain="POINT"):
+        """Store a field as a named attribute; returns the geometry."""
+        node = self._place(self.nodes.new("GeometryNodeStoreNamedAttribute"))
+        node.data_type = data_type
+        node.domain = domain
+        self._connect(node.inputs["Geometry"], geometry)
+        node.inputs["Name"].default_value = name
+        self._connect(node.inputs["Value"], value)
+        return node.outputs["Geometry"]
+
+    def sample_index(self, geometry, value, index, data_type="FLOAT", domain="CURVE"):
+        """``value`` of element ``index`` of ``geometry``'s ``domain``."""
+        node = self._place(self.nodes.new("GeometryNodeSampleIndex"))
+        node.data_type = data_type
+        node.domain = domain
+        self._connect(node.inputs["Geometry"], geometry)
+        self._connect(node.inputs["Value"], value)
+        self._connect(node.inputs["Index"], index)
+        return node.outputs["Value"]
+
+    def sample_curve_at_length(self, curves, value, curve_index, length, data_type):
+        """``value`` interpolated at arc ``length`` along curve ``curve_index``."""
+        node = self._place(self.nodes.new("GeometryNodeSampleCurve"))
+        node.data_type = data_type
+        node.mode = "LENGTH"
+        node.use_all_curves = False
+        self._connect(node.inputs["Curves"], curves)
+        self._connect(node.inputs["Value"], value)
+        self._connect(node.inputs["Curve Index"], curve_index)
+        self._connect(node.inputs["Length"], length)
+        return node.outputs["Value"]
+
+
+def add_moving_streamline_markers(node_group, curves, travel_time_step, spec):
+    """
+    Direction cones that move along the streamlines with the air.
+
+    The idea: a marker sits wherever the travel time from the seed (the
+    ``skyvista_travel_time`` point attribute) equals ``clock + k * step`` for
+    some integer k. As the flow clock advances, every marker moves downstream
+    exactly as far as the air does in that time, so markers crowd and slow
+    where the wind is weak and spread and speed up where it is strong.
+
+    Placing points at given travel times needs the inverse of travel time
+    along a curve, which no node computes directly. The trick is to
+    *straighten* each curve: every point's real position and tangent are
+    saved as attributes, then the point is moved to x = travel time. On the
+    straightened curve, arc length *is* travel time, so ``Sample Curve`` at
+    length ``t - t_start`` reads the saved position, tangent and color at
+    travel time t, interpolated linearly between points.
+
+    The markers come from a ``Points`` node with ``M`` points per curve, where
+    ``M`` is enough for the longest curve (its travel-time span over the
+    step, plus one). Point i belongs to curve ``i // M`` and is marker
+    ``k = i % M`` on it. The first marker's time is the first time after the
+    curve start that is in phase with the clock::
+
+        first = t_start + ((clock - t_start) mod step)
+        t_k = first + k * step
+
+    Markers past the curve end are deleted. Each remaining marker gets a
+    cone, turned along the saved tangent and scaled down to nothing within
+    ``MARKER_END_FADE_FRACTION`` of a step of either curve end, so markers
+    grow in at the upstream end and shrink away at the downstream end
+    instead of popping.
+
+    The clock is a Value node named ``FLOW_CLOCK_NODE`` (model seconds),
+    keyframed per frame by ``key_flow_clock``.
+
+    Returns:
+        The realized cones' geometry socket.
+    """
+    nodes = node_group.nodes
+    links = node_group.links
+    build = _NodeBuilder(node_group, (-1800, -900))
+
+    # The flow clock (s), keyframed per frame.
+    clock_node = nodes.new("ShaderNodeValue")
+    clock_node.name = FLOW_CLOCK_NODE
+    clock_node.label = "Flow clock (s)"
+    clock_node.location = (-2000, -700)
+    clock_node.outputs[0].default_value = 0.0
+    clock = clock_node.outputs[0]
+
+    # ---- Save each point's real position and flow direction, then
+    # straighten the curves so that arc length equals travel time.
+    position = nodes.new("GeometryNodeInputPosition")
+    position.location = (-2000, -900)
+    tangent = nodes.new("GeometryNodeInputTangent")
+    tangent.location = (-2000, -1000)
+    saved = build.store(
+        curves, "skyvista_position", position.outputs["Position"], "FLOAT_VECTOR"
+    )
+    saved = build.store(
+        saved, "skyvista_tangent", tangent.outputs["Tangent"], "FLOAT_VECTOR"
+    )
+    travel_time = build.named_attribute(TRAVEL_TIME_ATTRIBUTE)
+    straight_position = nodes.new("ShaderNodeCombineXYZ")
+    straight_position.location = (-1400, -1100)
+    links.new(travel_time, straight_position.inputs["X"])
+    straighten = nodes.new("GeometryNodeSetPosition")
+    straighten.location = (-1200, -1000)
+    links.new(saved, straighten.inputs["Geometry"])
+    links.new(straight_position.outputs["Vector"], straighten.inputs["Position"])
+    straight_curves = straighten.outputs["Geometry"]
+
+    # ---- Markers per curve: enough for the longest travel-time span.
+    curve_count_node = nodes.new("GeometryNodeAttributeDomainSize")
+    curve_count_node.component = "CURVE"
+    curve_count_node.location = (-1000, -1300)
+    links.new(straight_curves, curve_count_node.inputs["Geometry"])
+    span = build.math(
+        "SUBTRACT",
+        build.named_attribute(TRAVEL_TIME_END_ATTRIBUTE),
+        build.named_attribute(TRAVEL_TIME_START_ATTRIBUTE),
+    )
+    span_statistics = nodes.new("GeometryNodeAttributeStatistic")
+    span_statistics.data_type = "FLOAT"
+    span_statistics.domain = "CURVE"
+    span_statistics.location = (-800, -1400)
+    links.new(straight_curves, span_statistics.inputs["Geometry"])
+    links.new(span, span_statistics.inputs["Attribute"])
+    markers_per_curve = build.math(
+        "ADD",
+        build.math(
+            "CEIL",
+            build.math("DIVIDE", span_statistics.outputs["Max"], travel_time_step),
+        ),
+        1.0,
+    )
+    marker_count = build.math(
+        "MULTIPLY", markers_per_curve, curve_count_node.outputs["Spline Count"]
+    )
+    points_node = nodes.new("GeometryNodePoints")
+    points_node.location = (-200, -1300)
+    links.new(marker_count, points_node.inputs["Count"])
+    marker_points = points_node.outputs[0]
+
+    # ---- Each marker's curve and travel time.
+    index = nodes.new("GeometryNodeInputIndex")
+    index.location = (-400, -1500)
+    curve_index = build.math(
+        "FLOOR", build.math("DIVIDE", index.outputs["Index"], markers_per_curve)
+    )
+    marker_number = build.math(
+        "SUBTRACT",
+        index.outputs["Index"],
+        build.math("MULTIPLY", curve_index, markers_per_curve),
+    )
+    curve_start = build.sample_index(
+        straight_curves,
+        build.named_attribute(TRAVEL_TIME_START_ATTRIBUTE),
+        curve_index,
+    )
+    curve_end = build.sample_index(
+        straight_curves,
+        build.named_attribute(TRAVEL_TIME_END_ATTRIBUTE),
+        curve_index,
+    )
+    # Floored modulo: (clock - start) - step * floor((clock - start) / step).
+    clock_since_start = build.math("SUBTRACT", clock, curve_start)
+    phase = build.math(
+        "SUBTRACT",
+        clock_since_start,
+        build.math(
+            "MULTIPLY",
+            build.math(
+                "FLOOR", build.math("DIVIDE", clock_since_start, travel_time_step)
+            ),
+            travel_time_step,
+        ),
+    )
+    marker_time = build.math(
+        "ADD",
+        build.math("ADD", curve_start, phase),
+        build.math("MULTIPLY", marker_number, travel_time_step),
+    )
+
+    # Keep the per-marker values: indices shift once markers are deleted.
+    marker_points = build.store(marker_points, "skyvista_curve", curve_index, "INT")
+    marker_points = build.store(marker_points, "skyvista_marker_time", marker_time)
+    marker_points = build.store(marker_points, "skyvista_curve_start", curve_start)
+    marker_points = build.store(marker_points, "skyvista_curve_end", curve_end)
+
+    # ---- Drop markers past their curve's downstream end.
+    past_end = nodes.new("FunctionNodeCompare")
+    past_end.data_type = "FLOAT"
+    past_end.operation = "GREATER_THAN"
+    past_end.location = (600, -1300)
+    links.new(build.named_attribute("skyvista_marker_time"), past_end.inputs["A"])
+    links.new(build.named_attribute("skyvista_curve_end"), past_end.inputs["B"])
+    delete = nodes.new("GeometryNodeDeleteGeometry")
+    delete.domain = "POINT"
+    delete.location = (800, -1200)
+    links.new(marker_points, delete.inputs["Geometry"])
+    links.new(past_end.outputs["Result"], delete.inputs["Selection"])
+    kept_markers = delete.outputs["Geometry"]
+
+    # ---- Read position, direction and color at each marker's travel time.
+    stored_curve = build.named_attribute("skyvista_curve", "INT")
+    stored_time = build.named_attribute("skyvista_marker_time")
+    stored_start = build.named_attribute("skyvista_curve_start")
+    stored_end = build.named_attribute("skyvista_curve_end")
+    length_along = build.math("SUBTRACT", stored_time, stored_start)
+    marker_position = build.sample_curve_at_length(
+        straight_curves,
+        build.named_attribute("skyvista_position", "FLOAT_VECTOR"),
+        stored_curve,
+        length_along,
+        "FLOAT_VECTOR",
+    )
+    marker_tangent = build.sample_curve_at_length(
+        straight_curves,
+        build.named_attribute("skyvista_tangent", "FLOAT_VECTOR"),
+        stored_curve,
+        length_along,
+        "FLOAT_VECTOR",
+    )
+    marker_color = build.sample_curve_at_length(
+        straight_curves,
+        build.named_attribute("col_data", "FLOAT_COLOR"),
+        stored_curve,
+        length_along,
+        "FLOAT_COLOR",
+    )
+    placed = nodes.new("GeometryNodeSetPosition")
+    placed.location = (1400, -1200)
+    links.new(kept_markers, placed.inputs["Geometry"])
+    links.new(marker_position, placed.inputs["Position"])
+    colored = build.store(
+        placed.outputs["Geometry"], "col_data", marker_color, "FLOAT_COLOR"
+    )
+
+    # ---- Size: full inside the curve, shrinking to zero at either end.
+    fade_time = MARKER_END_FADE_FRACTION * travel_time_step
+    distance_to_nearest_end = build.math(
+        "MINIMUM", length_along, build.math("SUBTRACT", stored_end, stored_time)
+    )
+    marker_scale = build.math(
+        "MINIMUM",
+        build.math("MAXIMUM", build.math("DIVIDE", distance_to_nearest_end, fade_time)),
+        1.0,
+    )
+
+    # ---- One cone per marker, turned downstream.
+    align = nodes.new("FunctionNodeAlignRotationToVector")
+    align.axis = "Z"
+    align.location = (1600, -1400)
+    links.new(marker_tangent, align.inputs["Vector"])
+    cone = add_streamline_cone(node_group, spec, (1400, -1600))
+    instances = nodes.new("GeometryNodeInstanceOnPoints")
+    instances.location = (1900, -1200)
+    links.new(colored, instances.inputs["Points"])
+    links.new(cone, instances.inputs["Instance"])
+    links.new(align.outputs["Rotation"], instances.inputs["Rotation"])
+    links.new(marker_scale, instances.inputs["Scale"])
+    realize = nodes.new("GeometryNodeRealizeInstances")
+    realize.location = (2100, -1200)
+    links.new(instances.outputs["Instances"], realize.inputs["Geometry"])
+    return realize.outputs["Geometry"]
+
+
+def key_flow_clock(node_group, flow_clock):
+    """
+    Keyframe the streamline tree's flow clock from the manifest.
+
+    ``flow_clock`` is the manifest's ``{"keyframes": [{"frame", "seconds"}]}``
+    (one per video frame). Interpolation is linear, so the clock also runs
+    smoothly between keys if the frame rate is raised in Blender. Without
+    keyframes the clock stays at zero and the markers stand still.
+    """
+    clock_node = node_group.nodes.get(FLOW_CLOCK_NODE)
+    if clock_node is None or not flow_clock or not flow_clock.get("keyframes"):
+        return
+    clock_socket = clock_node.outputs[0]
+    for keyframe in flow_clock["keyframes"]:
+        clock_socket.default_value = float(keyframe["seconds"])
+        clock_socket.keyframe_insert("default_value", frame=int(keyframe["frame"]))
+    animation_data = node_group.animation_data
+    if animation_data and animation_data.action:
+        for fcurve in _action_fcurves(animation_data.action):
+            for keyframe_point in fcurve.keyframe_points:
+                keyframe_point.interpolation = "LINEAR"
+
+
+def make_polyline_curves(name, positions, curve_sizes, colors_srgb, travel_times=None):
     """
     A Curves datablock with one poly curve per streamline and its colors.
 
-    Colors arrive as sRGB and are linearized, as for glyph points.
+    Colors arrive as sRGB and are linearized, as for glyph points. Travel
+    times (s from each streamline's seed), when given, become the point
+    attribute TRAVEL_TIME_ATTRIBUTE, and each curve's first and last travel
+    time become the curve attributes TRAVEL_TIME_START_ATTRIBUTE and
+    TRAVEL_TIME_END_ATTRIBUTE, which the moving markers read.
     """
     import numpy as np
 
@@ -1338,16 +1696,33 @@ def make_polyline_curves(name, positions, curve_sizes, colors_srgb):
     ).astype(np.float32)
     color_attribute = curves.attributes.new("col_data", "FLOAT_COLOR", "POINT")
     color_attribute.data.foreach_set("color", colors_rgba.ravel())
+
+    if travel_times is not None:
+        travel_times = np.asarray(travel_times, dtype=np.float32)
+        curves.attributes.new(TRAVEL_TIME_ATTRIBUTE, "FLOAT", "POINT").data.foreach_set(
+            "value", travel_times
+        )
+        # Index of each curve's first and last point in the flat point arrays.
+        curve_ends = np.cumsum(np.asarray(curve_sizes, dtype=np.int64))
+        curve_starts = curve_ends - np.asarray(curve_sizes, dtype=np.int64)
+        for attribute_name, point_indices in (
+            (TRAVEL_TIME_START_ATTRIBUTE, curve_starts),
+            (TRAVEL_TIME_END_ATTRIBUTE, curve_ends - 1),
+        ):
+            curves.attributes.new(attribute_name, "FLOAT", "CURVE").data.foreach_set(
+                "value", np.ascontiguousarray(travel_times[point_indices])
+            )
     return curves
 
 
-def import_polylines(bundle_dir, object_spec, root_empty, frame_start):
+def import_polylines(bundle_dir, object_spec, root_empty, frame_start, flow_clock=None):
     """
     Build streamline tubes from a ``polylines`` manifest entry.
 
     Each frame's file becomes one Curves object carrying the shared
     streamline geometry-nodes modifier, visible on its own frame only (as for
-    glyph point clouds).
+    glyph point clouds). The tree's flow clock, which moves markers with
+    ``arrow_travel_time``, is keyed from the manifest's ``flow_clock``.
     """
     import numpy as np
 
@@ -1357,6 +1732,7 @@ def import_polylines(bundle_dir, object_spec, root_empty, frame_start):
     frame_end = frame_start + n_frames - 1
     material = make_surface_material(name, object_spec["material"])
     node_group = make_streamline_node_group(name, geometry, material)
+    key_flow_clock(node_group, flow_clock)
 
     collection = bpy.data.collections.new(name)
     bpy.context.scene.collection.children.link(collection)
@@ -1374,6 +1750,11 @@ def import_polylines(bundle_dir, object_spec, root_empty, frame_start):
                 polyline_file["positions"],
                 polyline_file["curve_sizes"],
                 polyline_file["colors"],
+                (
+                    polyline_file["travel_times"]
+                    if "travel_times" in polyline_file.files
+                    else None
+                ),
             )
         curves_object = bpy.data.objects.new(f"{name}_{frame:04d}", curves)
         collection.objects.link(curves_object)
@@ -1407,15 +1788,20 @@ def import_volume_object(bundle_dir, object_spec, root_empty, frame_start, n_fra
     volume_object = imported[0]
     volume_object.name = object_spec["name"]
 
-    # Ensure it plays as a sequence over the animation range.
+    # Play the files as a sequence over the animation range. A single file
+    # (a still, or one data time held over many video frames) is shown on
+    # every frame instead: as a one-frame sequence it would be hidden after
+    # its frame.
     volume_data = volume_object.data
+    n_files = int(geometry.get("n_frames", n_frames))
     if hasattr(volume_data, "is_sequence"):
-        volume_data.is_sequence = True
-        try:
-            volume_data.frame_start = frame_start
-            volume_data.frame_duration = n_frames
-        except AttributeError:
-            pass
+        volume_data.is_sequence = n_files > 1
+        if n_files > 1:
+            try:
+                volume_data.frame_start = frame_start
+                volume_data.frame_duration = n_files
+            except AttributeError:
+                pass
 
     parent_keep_local(volume_object, root_empty)
     material_spec = object_spec["material"]
@@ -2303,7 +2689,11 @@ def main():
                 )
             elif carrier == "polylines":
                 built_objects += import_polylines(
-                    bundle_dir, object_spec, root_empty, frame_start
+                    bundle_dir,
+                    object_spec,
+                    root_empty,
+                    frame_start,
+                    flow_clock=manifest.get("flow_clock"),
                 )
             elif carrier == "point_glyphs":
                 built_objects += import_point_glyphs(

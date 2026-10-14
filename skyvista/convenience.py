@@ -372,6 +372,7 @@ def make_streamlines(
     # Appearance
     tube_radius: float = 50.0,
     arrow_spacing: Optional[float] = None,
+    arrow_travel_time: Optional[float] = None,
     color: Optional[str] = None,
     cmap: Optional[str] = None,
     clim: Optional[Tuple[float, float]] = None,
@@ -401,6 +402,9 @@ def make_streamlines(
         tube_radius: Tube radius (data units).
         arrow_spacing: Distance between downstream-pointing cone markers
             (data units; Blender only). None draws plain tubes.
+        arrow_travel_time: Travel time (s) between markers that move with
+            the flow as the Blender flow clock advances (see
+            ``StreamlineAppearance``). Replaces ``arrow_spacing``.
         color: Solid color (instead of a colormap).
         cmap: Colormap name.
         clim: Color limits.
@@ -434,6 +438,7 @@ def make_streamlines(
     appearance = StreamlineAppearance(
         tube_radius=tube_radius,
         arrow_spacing=arrow_spacing,
+        arrow_travel_time=arrow_travel_time,
         color=color,
         cmap=cmap,
         clim=clim,

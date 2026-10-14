@@ -330,6 +330,45 @@ class BlenderWorldConfig:
 
 
 @dataclass
+class BlenderHoldConfig:
+    """
+    Render a scene at one model time over many video frames.
+
+    The data stay frozen; only what the *flow clock* drives moves. Today that
+    is streamline markers with ``arrow_travel_time``, which sit at fixed
+    travel times along each streamline and so move downstream as the clock
+    advances. The clock is model time in seconds: it starts at
+    ``clock_start`` and advances ``clock_seconds_per_frame`` every video
+    frame, so ``clock_seconds_per_frame * fps`` is the playback speed-up.
+
+    The motion loops seamlessly when the total clock advance,
+    ``n_frames * clock_seconds_per_frame``, is a whole number of marker
+    travel times: the last frame is then one step short of the first.
+
+    Attributes:
+        n_frames: Video frames to render.
+        clock_seconds_per_frame: Model seconds the flow clock advances per
+            video frame.
+        clock_start: Flow clock at the first frame (s).
+    """
+
+    n_frames: int
+    clock_seconds_per_frame: float
+    clock_start: float = 0.0
+
+    def clock_keyframes(self, frame_start: int) -> List[Dict[str, float]]:
+        """The flow clock at every video frame, as manifest keyframes."""
+        return [
+            {
+                "frame": frame_start + frame_offset,
+                "seconds": self.clock_start
+                + frame_offset * self.clock_seconds_per_frame,
+            }
+            for frame_offset in range(self.n_frames)
+        ]
+
+
+@dataclass
 class BlenderExportConfig:
     """
     Top-level configuration for a Blender export.
@@ -346,6 +385,9 @@ class BlenderExportConfig:
             the render. False leaves the render clean (the colorbar PNGs are
             still written to ``assets/colorbars/``), for figures that draw
             their own legend.
+        hold: Render a single-time scene over many video frames with a
+            running flow clock (see :class:`BlenderHoldConfig`). None renders
+            one frame per data time.
     """
 
     transform: BlenderTransform = field(default_factory=BlenderTransform)
@@ -355,6 +397,7 @@ class BlenderExportConfig:
     fps: float = 24.0
     frame_start: int = 1
     overlay_colorbars: bool = True
+    hold: Optional[BlenderHoldConfig] = None
 
     @classmethod
     def for_clouds(cls, **overrides) -> "BlenderExportConfig":
@@ -1211,21 +1254,32 @@ def _build_streamline_entry(
     if ``arrow_spacing`` is set, place downstream-pointing cones along it. The
     points are ordered downstream (see ``StreamlineSpec.polylines``), so the
     curve tangent is the flow direction.
+
+    Each file also holds ``travel_times`` (s from the seed, per point). With
+    ``arrow_travel_time`` set, the build script places the cones at fixed
+    travel times offset by the flow clock instead, so they move with the air.
     """
     frame_points = []
     extra_arrays_per_frame = []
     for time in times:
         lines = spec.polylines(dataset, time)
         if lines:
-            positions = np.concatenate([points for points, _ in lines])
-            color_values = np.concatenate([colors for _, colors in lines])
-            curve_sizes = np.array([len(points) for points, _ in lines], dtype=np.int32)
+            positions = np.concatenate([line.points for line in lines])
+            color_values = np.concatenate([line.color_values for line in lines])
+            travel_times = np.concatenate([line.travel_times for line in lines])
+            curve_sizes = np.array([len(line.points) for line in lines], dtype=np.int32)
         else:
             positions = np.zeros((0, 3))
             color_values = np.zeros(0)
+            travel_times = np.zeros(0)
             curve_sizes = np.zeros(0, dtype=np.int32)
         frame_points.append((positions, None, color_values))
-        extra_arrays_per_frame.append({"curve_sizes": curve_sizes})
+        extra_arrays_per_frame.append(
+            {
+                "curve_sizes": curve_sizes,
+                "travel_times": travel_times.astype(np.float32),
+            }
+        )
         running_bounds = _accumulate_bounds(running_bounds, positions)
 
     appearance = spec.appearance
@@ -1250,6 +1304,11 @@ def _build_streamline_entry(
             "arrow_spacing": (
                 float(appearance.arrow_spacing)
                 if appearance.arrow_spacing is not None
+                else None
+            ),
+            "arrow_travel_time": (
+                float(appearance.arrow_travel_time)
+                if appearance.arrow_travel_time is not None
                 else None
             ),
             "arrow_head_radius": tube_radius * appearance.arrow_head_radius_factor,
@@ -1633,6 +1692,7 @@ def _build_volume_entry(
         "spec_type": "volume",
         "geometry": {
             "carrier": "vdb_sequence",
+            "n_frames": len(times),
             "path_pattern": path_pattern,
             "grid_name": varname,
         },
@@ -2097,6 +2157,7 @@ def _build_cloud_entry(
         "spec_type": "cloud",
         "geometry": {
             "carrier": "vdb_sequence",
+            "n_frames": len(times),
             "path_pattern": f"data/{spec.name}/{spec.name}_####.vdb",
             "grid_name": (
                 species_entries[0]["extinction_grid"] if species_entries else None
@@ -2304,6 +2365,7 @@ def _build_dye_entry(
         "spec_type": "dye",
         "geometry": {
             "carrier": "vdb_sequence",
+            "n_frames": len(times),
             "path_pattern": f"data/{spec.name}/{spec.name}_####.vdb",
             "grid_name": DYE_FRACTION_VARIABLE,
             "vertical_spacing": vertical_spacing,
@@ -2555,6 +2617,14 @@ def export_scene_to_blender(
 
     render_times = times if times is not None else scene._get_all_times()
     n_frames = len(render_times)
+    # A hold renders its one data time over many video frames.
+    hold = config.hold
+    if hold is not None and n_frames > 1:
+        raise ValueError(
+            f"config.hold renders one data time, but the scene has {n_frames}; "
+            "pass times=[t] to choose one."
+        )
+    n_video_frames = hold.n_frames if hold is not None else n_frames
 
     object_entries: List[Dict[str, Any]] = []
     running_bounds: Optional[np.ndarray] = None
@@ -2627,9 +2697,16 @@ def export_scene_to_blender(
         "time": {
             "fps": config.fps,
             "frame_start": config.frame_start,
-            "frame_end": config.frame_start + max(n_frames - 1, 0),
+            "frame_end": config.frame_start + max(n_video_frames - 1, 0),
             "data_times": [_json_safe_time(t) for t in render_times],
         },
+        # Model time (s) at each video frame, for clock-driven motion such as
+        # streamline markers. Absent: the clock stands at zero.
+        "flow_clock": (
+            {"keyframes": hold.clock_keyframes(config.frame_start)}
+            if hold is not None
+            else None
+        ),
         "render": config.render.to_dict(),
         "world": config.world.to_dict(),
         "camera": _compute_camera_manifest(

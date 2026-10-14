@@ -187,12 +187,27 @@ class StreamlineAppearance(Appearance):
             way the air moves. Blender only (PyVista draws plain tubes).
         arrow_head_radius_factor: Cone base radius / tube radius.
         arrow_head_length_factor: Cone length / tube radius.
+        arrow_travel_time: Travel time (s) between neighbouring markers. When
+            set, markers are spaced by the time air takes to move between
+            them (not by ``arrow_spacing``) and move along the streamline at
+            the local wind speed as the Blender flow clock advances, so they
+            show the flow in motion: closely spaced and slow where the air is
+            slow, widely spaced and fast where it is fast. The flow clock is
+            the model time of each frame of a ``BlenderAnimation``, or the
+            hold clock of a still scene (``BlenderExportConfig.hold``). Keep
+            it several times the clock advance per frame, or the motion
+            aliases (markers seem to stand still or run backwards). Blender
+            only.
+        arrow_minimum_speed: Speed floor (field units, e.g. m/s) used for the
+            travel time, so stagnant air does not stall markers forever.
     """
 
     tube_radius: float = 50.0
     arrow_spacing: Optional[float] = None
     arrow_head_radius_factor: float = 3.0
     arrow_head_length_factor: float = 8.0
+    arrow_travel_time: Optional[float] = None
+    arrow_minimum_speed: float = 0.5
 
 
 @dataclass

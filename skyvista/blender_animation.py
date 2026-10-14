@@ -370,6 +370,16 @@ class BlenderAnimation:
             "times_seconds": [self.time_seconds(i) for i in range(self.n_frames)],
         }
         merged["camera"] = self._merged_camera(manifests)
+        # The flow clock (streamline markers) runs with model time.
+        merged["flow_clock"] = {
+            "keyframes": [
+                {
+                    "frame": self.config.frame_start + frame_index,
+                    "seconds": self.time_seconds(frame_index),
+                }
+                for frame_index in range(self.n_frames)
+            ]
+        }
 
         # Colormap tables and the build script.
         for frame_index in range(self.n_frames):
