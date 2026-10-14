@@ -272,6 +272,36 @@ def isolate_tracked_cell(
     """
     Keep only the cloud of the tobac-selected cell (the right mover).
 
+    See :func:`tracked_cell_keep_weight` for how the cell is cut out.
+
+    Returns:
+        The weighted dataset, and the selected cell's (x, y) position (m).
+    """
+    keep_weight, selected_position = tracked_cell_keep_weight(
+        clouds, view.run_dir, taper_width
+    )
+    return apply_keep_weight(clouds, keep_weight), selected_position
+
+
+def apply_keep_weight(clouds: xr.Dataset, keep_weight: xr.DataArray) -> xr.Dataset:
+    """
+    Scale every hydrometeor field by a (y, x) weight between 0 and 1.
+
+    Mixing ratios and number concentrations are scaled together, so the
+    particle sizes, and with them the optics per unit mass, are kept.
+    """
+    hydrometeor_variables = [name for name in clouds.data_vars if name != "rho"]
+    return clouds.assign(
+        {name: clouds[name] * keep_weight for name in hydrometeor_variables}
+    )
+
+
+def tracked_cell_keep_weight(
+    clouds: xr.Dataset, run_dir: Path, taper_width: float
+) -> Tuple[xr.DataArray, Tuple[float, float]]:
+    """
+    A (y, x) weight that is 1 on the tobac-selected cell's side, 0 elsewhere.
+
     The tracking products in ``derived/`` give every tracked cell's position
     (``_all_tracks.csv``) and which cell is the storm (``tracks.csv``, chosen
     by the tracking config's cell-selection rule). At the render time, each
@@ -279,16 +309,16 @@ def isolate_tracked_cell(
     competitor -- a Voronoi split of the plan view. Merged anvils have no
     other dividing line. The split is softened into a linear fade across
     ``taper_width``, so the cut anvil thins out instead of ending in a flat
-    wall. Mixing ratios and number concentrations are scaled together, so
-    the particle sizes, and with them the optics per unit mass, are kept.
+    wall.
 
     Competing cells smaller than COMPETING_CELL_MINIMUM_SIZE_FRACTION of the
     selected cell are ignored: they are fragments of the same storm.
 
     Returns:
-        The weighted dataset, and the selected cell's (x, y) position (m).
+        The weight on the clouds' (y, x) grid, and the selected cell's (x, y)
+        position (m).
     """
-    derived_dir = view.run_dir / "derived"
+    derived_dir = run_dir / "derived"
     selected_tracks = pd.read_csv(derived_dir / "tracks.csv", parse_dates=["time"])
     all_tracks = pd.read_csv(derived_dir / "_all_tracks.csv", parse_dates=["time"])
     selected_cell = int(selected_tracks["cell"].iloc[0])
@@ -312,7 +342,7 @@ def isolate_tracked_cell(
 
     # Feature positions are fractional grid indices (hdim_1 = y, hdim_2 = x)
     # into the full domain; convert them to meters with the uncropped grid.
-    with xr.open_dataset(view.run_dir / "output" / "cm1out_000002.nc") as grid:
+    with xr.open_dataset(run_dir / "output" / "cm1out_000002.nc") as grid:
         full_x = grid["xh"].values
         full_y = grid["yh"].values
 
@@ -345,11 +375,7 @@ def isolate_tracked_cell(
         0.5 + (distance_to_competitor - distance_to_selected) / taper_width, 0.0, 1.0
     )
     keep_weight = xr.DataArray(keep_weight, dims=("y", "x"))
-    hydrometeor_variables = [name for name in clouds.data_vars if name != "rho"]
-    isolated_clouds = clouds.assign(
-        {name: clouds[name] * keep_weight for name in hydrometeor_variables}
-    )
-    return isolated_clouds, (selected_x, selected_y)
+    return keep_weight, (selected_x, selected_y)
 
 
 def make_export_config(
