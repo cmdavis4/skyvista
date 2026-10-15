@@ -13,23 +13,29 @@ supercell.
 | `04_animation_and_tracking.ipynb` | Animations over model time: a time-lapse with a fixed camera, then a camera that follows a storm along its tobac track, with the neighbouring storm faded out and per-frame captions. |
 | `05_flow_at_a_fixed_time.ipynb` | One output time held still while cones move along the streamlines at the speed of the air, rendered as a seamless loop. |
 
-Start with notebook 01. Notebooks 02 and 03 use its camera and preview
-settings. Notebook 05 builds on notebook 02.
+Start with notebook 01. Notebooks 02 and 03 use its camera and sun.
+Notebook 05 builds on notebook 02. Each notebook runs on its own.
+
+The notebooks read the model output with
+[xarrams](https://pypi.org/project/xarrams/), a separate package for RAMS
+and CM1 output. skyvista does not depend on it: any xarray `Dataset` with
+`x`, `y` and `z` coordinates in meters works.
 
 ## Running them
 
-1. Install Blender 5.0.
-2. Edit the paths at the top of `notebook_setup.py`: the Blender executable,
-   an ffmpeg (for the videos), and the model output.
-3. Start Jupyter in the pixi `blender` environment, from the repository root:
+1. Edit the paths at the top of `notebook_setup.py`: an ffmpeg (for the
+   videos) and the model output.
+2. Start Jupyter in the pixi `blender` environment, from the repository
+   root. This environment includes Blender itself (the `bpy` module) and
+   `xarrams`:
 
    ```bash
    pixi run -e blender jupyter lab examples/notebooks
    ```
 
-The renders use 16 samples per pixel and small images, so each takes from
-seconds to a few minutes on a many-core machine. Notebook 04 is the longest,
-at about 15 minutes. Everything a notebook makes goes into `work/` (ignored by
+The renders use skyvista's "preview" quality (16 samples per pixel) and
+small images, so each takes from seconds to a few minutes on a many-core
+machine. Notebook 04 is the longest, at about 15 minutes. Everything a notebook makes goes into `work/` (ignored by
 git).
 
 The command-line scripts in `../rams_clouds` and `../cm1_storms` make the

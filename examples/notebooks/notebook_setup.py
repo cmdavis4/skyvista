@@ -4,11 +4,11 @@ Shared setup for the skyvista example notebooks.
 Every notebook starts with ``import notebook_setup as setup``. Importing this
 module:
 
-1. puts the example script folders (``../rams_clouds``, ``../cm1_storms``) on
-   the import path, so the notebooks can reuse their data loaders;
-2. tells skyvista where Blender and ffmpeg are (``$SKYVISTA_BLENDER`` and
-   ``$SKYVISTA_FFMPEG``, unless already set);
-3. silences an h5py version warning that says nothing useful here.
+1. tells skyvista where ffmpeg is (``$SKYVISTA_FFMPEG``, unless already
+   set); Blender itself comes from the pixi environment, as the ``bpy``
+   module;
+2. lets h5py read ZFP-compressed RAMS output (see below);
+3. silences two warnings that say nothing useful here.
 
 It also holds the data paths the notebooks use. **Edit the paths below to
 point at your own output.** The notebooks write everything they make under
@@ -17,15 +17,13 @@ point at your own output.** The notebooks write everything they make under
 
 import io
 import os
-import sys
 import warnings
 from pathlib import Path
 
 # =============================================================================
 # Paths: edit these for your machine
 # =============================================================================
-# Blender 5.0 executable, and an ffmpeg for encoding videos.
-BLENDER_EXECUTABLE = Path.home() / "programs/blender-5.0.1-linux-x64/blender"
+# An ffmpeg for encoding videos.
 FFMPEG_EXECUTABLE = Path(
     "/home/cmdavis4/projects/dc_entrainment/.pixi/envs/default/bin/ffmpeg"
 )
@@ -54,47 +52,22 @@ CM1_SUPERCELL_RUN = CM1_DATA_ROOT / "sc/higher_res/dx-250_nstar-1e-07-nx-1500_ny
 WORK_DIR = Path(__file__).resolve().parent / "work"
 
 # =============================================================================
-# Preview quality
-# =============================================================================
-# Renders in these notebooks use few samples and a small image so each takes
-# seconds to a few minutes. For a final figure, raise both (e.g. 128 samples
-# at 1920 x 1080); a mature storm then takes ~10 min on 64 cores.
-PREVIEW_SAMPLES = 16
-PREVIEW_RESOLUTION = (960, 540)
-
-# =============================================================================
 # Environment
 # =============================================================================
-EXAMPLES_DIR = Path(__file__).resolve().parent.parent
-for example_folder in ("rams_clouds", "cm1_storms"):
-    folder_path = str(EXAMPLES_DIR / example_folder)
-    if folder_path not in sys.path:
-        sys.path.insert(0, folder_path)
-
 # The pixi environment's h5py was built against a slightly older HDF5.
 warnings.filterwarnings("ignore", message="h5py is running against HDF5")
+# xarrams opens a file once without h5netcdf's phony_dims argument, to list
+# its variables; xarray then warns about the argument's default.
+warnings.filterwarnings("ignore", message="The 'phony_dims' kwarg now defaults")
 
-# skyvista falls back to these when no executable is passed explicitly.
-os.environ.setdefault("SKYVISTA_BLENDER", str(BLENDER_EXECUTABLE))
+# RAMS lite output may be compressed with the ZFP filter, which HDF5 does not
+# include. Importing hdf5plugin registers it with h5py.
+import hdf5plugin  # noqa: E402, F401
+
+# skyvista falls back to this when no ffmpeg is passed explicitly.
 os.environ.setdefault("SKYVISTA_FFMPEG", str(FFMPEG_EXECUTABLE))
 
 WORK_DIR.mkdir(exist_ok=True)
-
-
-def apply_preview_quality(config, resolution=None):
-    """
-    Set a Blender export config to the notebooks' quick preview quality.
-
-    Args:
-        config: A ``skyvista.BlenderExportConfig`` (changed in place).
-        resolution: (width, height) in pixels; default PREVIEW_RESOLUTION.
-
-    Returns:
-        The same config, for chaining.
-    """
-    config.render.samples = PREVIEW_SAMPLES
-    config.render.resolution = tuple(resolution or PREVIEW_RESOLUTION)
-    return config
 
 
 def rendered_frame(bundle_dir, frame_number: int = 1) -> Path:
