@@ -12,6 +12,7 @@ supercell.
 | `03_passive_tracer_dye.ipynb` | RAMS passive tracers drawn as a colored dye, colored by the height the air started from. |
 | `04_animation_and_tracking.ipynb` | Animations over model time: a time-lapse with a fixed camera, then a camera that follows a storm along its tobac track, with the neighbouring storm faded out and per-frame captions. |
 | `05_flow_at_a_fixed_time.ipynb` | One output time held still while cones move along the streamlines at the speed of the air, rendered as a seamless loop. |
+| `06_parcel_trajectories.ipynb` | CM1 parcel trajectories: the parcels in a storm's updraft drawn as tapered trails, alone and inside a see-through cloud, and an animation in which the trails follow the parcels. |
 
 Start with notebook 01. Notebooks 02 and 03 use its camera and sun.
 Notebook 05 builds on notebook 02. Each notebook runs on its own.
