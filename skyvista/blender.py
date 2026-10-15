@@ -12,7 +12,8 @@ everything that touches ``bpy`` lives on the Blender side and reads the bundle.
 
 Carriers
 --------
-* Time-varying *meshes* (contours, slices, glyph meshes, trajectory tubes) are
+* Time-varying *meshes* (contours, slices, and glyph or trajectory meshes
+  baked with ``blender_instancing=False``) are
   written as **Alembic** (``.abc``) with per-frame changing topology, via the
   ``alembic3d`` bindings. Blender ingests these through a Mesh Sequence Cache
   modifier, which supports the changing vertex/face counts that isosurfaces
@@ -1025,10 +1026,11 @@ def _build_object_entry(
     Dispatch one spec to the appropriate carrier and return its manifest object
     entry plus the updated running spatial bounds.
 
-    Surface-mesh specs (contour, slice, trajectory tubes, and vector glyphs
+    Surface-mesh specs (contour, slice, and trajectories or vector glyphs
     with ``blender_instancing=False``) go to Alembic; volume and cloud specs go
-    to a VDB sequence; vector glyphs by default go to per-frame point files that
-    Blender instances arrows on.
+    to a VDB sequence; vector glyphs and particles by default go to per-frame
+    point files that Blender instances on; streamlines and trajectory tubes by
+    default go to per-frame polylines that Blender sweeps into tubes.
     """
     from .varspec import (
         CloudSpec,
@@ -1050,6 +1052,14 @@ def _build_object_entry(
         and spec.appearance.blender_instancing
     ):
         return _build_particle_points_entry(
+            spec, dataset, times, data_subdir, running_bounds
+        )
+    if (
+        isinstance(spec, TrajectorySpec)
+        and spec.appearance.style == "tube"
+        and spec.appearance.blender_instancing
+    ):
+        return _build_trajectory_curves_entry(
             spec, dataset, times, data_subdir, running_bounds
         )
     if isinstance(spec, VectorSpec) and spec.appearance.blender_instancing:
@@ -1449,6 +1459,86 @@ def _build_streamline_entry(
             ),
             "arrow_head_radius": tube_radius * appearance.arrow_head_radius_factor,
             "arrow_head_length": tube_radius * appearance.arrow_head_length_factor,
+        },
+        "material": material,
+    }
+    return object_entry, running_bounds
+
+
+# Evaluated points per segment of a trajectory trail's curve in Blender.
+TRAJECTORY_CURVE_RESOLUTION = 3
+
+
+def _build_trajectory_curves_entry(
+    spec: "VarSpec",
+    dataset,
+    times: List[Any],
+    data_subdir: Path,
+    running_bounds: Optional[np.ndarray],
+) -> Tuple[Dict[str, Any], Optional[np.ndarray]]:
+    """
+    Export trajectory tubes as per-frame trails for Blender to sweep into tubes.
+
+    This uses the same ``polylines`` carrier as streamlines. Each frame's file
+    holds every trail's points end to end (``positions``, oldest point first,
+    so the curve tangent is the direction of motion), their baked colors,
+    ``curve_sizes`` (points per trail), and ``radius_scales`` (the tube radius
+    at each point as a fraction of ``tube_radius``; see ``trail_taper``). The
+    build script rebuilds the trails as a Curves object, stores the radius
+    scales as the curves' ``radius`` attribute (which Curve to Mesh multiplies
+    into the profile), and places one cone on the last point of each trail.
+
+    Compared with baking PyVista's tubes, the files hold three numbers per
+    track point instead of a tube's ring of vertices, and the tube's look
+    (radius, cone size, smoothness) stays editable in Blender.
+    """
+    geometry = spec.geometry
+    frame_points = []
+    extra_arrays_per_frame = []
+    for time in times:
+        trails = spec.trails(dataset, time)
+        frame_points.append((trails.positions, None, trails.color_values))
+        extra_arrays_per_frame.append(
+            {
+                "curve_sizes": trails.curve_sizes.astype(np.int32),
+                "radius_scales": trails.radius_scales.astype(np.float32),
+            }
+        )
+        running_bounds = _accumulate_bounds(running_bounds, trails.positions)
+
+    material, path_pattern = _write_point_frames(
+        spec.name,
+        spec.appearance,
+        frame_points,
+        data_subdir,
+        coloring_mode="vertex_color",
+        default_label=geometry.scalar or "",
+        extra_arrays_per_frame=extra_arrays_per_frame,
+    )
+    tube_radius = float(geometry.tube_radius)
+    # A head cone only when it has a length; head_length_frac = 0 drops it.
+    head_length = tube_radius * float(geometry.head_length_frac)
+    object_entry = {
+        "name": spec.name,
+        "spec_type": "trajectory",
+        "geometry": {
+            "carrier": "polylines",
+            "path_pattern": path_pattern,
+            "n_frames": len(frame_points),
+            "tube_radius": tube_radius,
+            # Vertices around the tube: the trajectory's tube_resolution.
+            "profile_vertices": int(geometry.tube_resolution),
+            # Model tracks are sampled at output times; Catmull-Rom curves
+            # with a few points per segment round the corners between them.
+            "curve_resolution": TRAJECTORY_CURVE_RESOLUTION,
+            "head_cone": (
+                {
+                    "radius": tube_radius * float(geometry.head_radius_frac),
+                    "length": head_length,
+                }
+                if head_length > 0
+                else None
+            ),
         },
         "material": material,
     }

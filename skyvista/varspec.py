@@ -795,6 +795,31 @@ class SliceSpec(VarSpec):
         return mesh
 
 
+class TrajectoryTrails(NamedTuple):
+    """
+    Every trail of a trajectory dataset at one time, as flat point arrays.
+
+    The trails lie end to end in the arrays: the first ``curve_sizes[0]``
+    points are the first trail, and so on. Within a trail the points run
+    oldest first, so the last point of each trail is its head (the current
+    position) and the curve tangent is the direction of motion.
+
+    Attributes:
+        positions: (P, 3) point positions, in data units.
+        curve_sizes: (n,) number of points in each trail.
+        ages: (P,) seconds between each point's time and the time shown.
+        radius_scales: (P,) tube radius at each point as a fraction of the
+            head's radius (1 at the head; ``trail_taper`` at the oldest end).
+        color_values: (P,) values of the coloring scalar, or None.
+    """
+
+    positions: np.ndarray
+    curve_sizes: np.ndarray
+    ages: np.ndarray
+    radius_scales: np.ndarray
+    color_values: Optional[np.ndarray]
+
+
 @dataclass
 class TrajectorySpec(VarSpec):
     """
@@ -834,6 +859,10 @@ class TrajectorySpec(VarSpec):
         # Apply limit
         if self.limit and len(ds[trajectory_dim]) > self.limit:
             ds = ds.isel({trajectory_dim: slice(self.limit)})
+
+        # Keep only the trail behind the time shown, if a trail duration is set
+        if time is not None and self.geometry.trail_duration is not None:
+            ds = self._trail_window(ds, time)
 
         # Apply max points on the tail, if passed
         if self.geometry.max_points:
@@ -944,6 +973,138 @@ class TrajectorySpec(VarSpec):
                 valid_mask
             ]
         return points[valid_mask], scalar_values
+
+    @staticmethod
+    def _seconds_between(later: Any, earlier: Any) -> np.ndarray:
+        """
+        ``later - earlier`` in seconds, for any kind of time coordinate.
+
+        Time coordinates may be datetimes (RAMS via xarrams), timedeltas, or
+        plain numbers that are taken to be seconds (CM1 output).
+        """
+        difference = np.asarray(later) - np.asarray(earlier)
+        if np.issubdtype(difference.dtype, np.timedelta64):
+            return difference / np.timedelta64(1, "s")
+        return difference.astype(float)
+
+    def _trail_window(self, ds: xr.Dataset, time: Any) -> xr.Dataset:
+        """
+        The times within ``trail_duration`` seconds before ``time``, inclusive.
+
+        The window's start is ``time`` minus the duration, expressed in the
+        time coordinate's own type, so the selection is an ordinary label
+        slice whatever that type is.
+        """
+        time = np.asarray(time)
+        duration_seconds = float(self.geometry.trail_duration)
+        if np.issubdtype(time.dtype, np.datetime64) or np.issubdtype(
+            time.dtype, np.timedelta64
+        ):
+            # Datetimes and timedeltas subtract a timedelta (ns resolution).
+            window_start = time - np.timedelta64(round(duration_seconds * 1e9), "ns")
+        else:
+            window_start = time - duration_seconds
+        return ds.sel(time=slice(window_start, time))
+
+    def trails(self, ds: xr.Dataset, time: Any) -> TrajectoryTrails:
+        """
+        Every track's trail up to ``time``, as flat arrays for curve export.
+
+        The mechanism is fully vectorized, because model parcel output can
+        hold 10^4-10^5 tracks over hundreds of times:
+
+        1. Cut the times to the trail: everything up to ``time`` (None = the
+           last time), then the last ``trail_duration`` seconds and the last
+           ``max_points`` times, when set.
+        2. Stack x, y, z as a (track, time, 3) array. A point is valid when
+           all three coordinates are finite; a track needs two valid points
+           to make a curve.
+        3. Boolean-index the valid points. Row-major order keeps each track's
+           points together and in time order, so the flat arrays hold the
+           trails end to end, oldest point first.
+
+        A track with missing positions in the middle (e.g. a parcel that left
+        and re-entered the domain) becomes one trail that joins across the
+        gap.
+
+        The radius scale falls linearly from 1 at the head to ``trail_taper``
+        at an age of ``trail_duration`` (or at each trail's own oldest point,
+        when no duration is set).
+        """
+        from carlee_tools import maybe_cast_to_float
+
+        geometry = self.geometry
+        trajectory_dim = "trajectory_ix" if "trajectory_ix" in ds.dims else "parcel_ix"
+
+        # ---- Limit the number of tracks, as for tubes and particles.
+        if (
+            self.limit
+            and trajectory_dim in ds.dims
+            and ds.sizes[trajectory_dim] > self.limit
+        ):
+            ds = ds.isel({trajectory_dim: slice(self.limit)})
+
+        # ---- Cut the times to the trail behind the time shown.
+        if time is not None:
+            ds = ds.sel(time=slice(None, time))
+        else:
+            time = ds["time"].values[-1]
+        if geometry.trail_duration is not None:
+            ds = self._trail_window(ds, time)
+        if geometry.max_points:
+            ds = ds.isel(time=slice(-geometry.max_points, None))
+        ds = ds.transpose(trajectory_dim, "time", ...)
+
+        # ---- Valid points of every track, as a (track, time) mask.
+        track_positions = np.stack(
+            [ds[coordinate].values for coordinate in ("x", "y", "z")], axis=-1
+        ).astype(float)
+        valid_points = np.isfinite(track_positions).all(axis=-1)
+        points_per_track = valid_points.sum(axis=1)
+        tracks_with_a_trail = points_per_track >= 2
+        trail_points = valid_points & tracks_with_a_trail[:, np.newaxis]
+
+        # ---- Flatten: trails end to end, each oldest point first.
+        positions = track_positions[trail_points]
+        curve_sizes = points_per_track[tracks_with_a_trail].astype(np.int32)
+
+        # ---- Age of every point (s before the time shown).
+        ages_by_time = self._seconds_between(time, ds["time"].values)
+        ages = np.broadcast_to(ages_by_time, trail_points.shape)[trail_points]
+
+        # ---- Taper: radius scale 1 at the head, trail_taper at the oldest end.
+        if geometry.trail_duration is not None and geometry.trail_duration > 0:
+            age_fraction = ages / float(geometry.trail_duration)
+        else:
+            # Each trail's own oldest age, repeated over its points.
+            oldest_age_per_trail = np.repeat(
+                ages[np.cumsum(curve_sizes) - curve_sizes], curve_sizes
+            )
+            age_fraction = ages / np.where(
+                oldest_age_per_trail > 0, oldest_age_per_trail, 1.0
+            )
+        age_fraction = np.clip(age_fraction, 0.0, 1.0)
+        radius_scales = 1.0 - (1.0 - geometry.trail_taper) * age_fraction
+
+        # ---- Coloring values, per point. A scalar with one value per track
+        # (or per time) is broadcast over the (track, time) layout first.
+        color_values = None
+        if geometry.scalar and geometry.scalar in ds:
+            scalar_by_track_and_time = (
+                ds[geometry.scalar]
+                .broadcast_like(ds["x"])
+                .transpose(trajectory_dim, "time")
+            )
+            scalar_values = maybe_cast_to_float(scalar_by_track_and_time.values)
+            color_values = scalar_values[trail_points]
+
+        return TrajectoryTrails(
+            positions=positions,
+            curve_sizes=curve_sizes,
+            ages=ages.astype(float),
+            radius_scales=radius_scales,
+            color_values=color_values,
+        )
 
     def _create_particle_mesh(self, ds: xr.Dataset, trajectory_dim: str) -> pv.DataSet:
         """Create particle-style mesh (spheres at final positions)."""

@@ -221,12 +221,15 @@ class TrajectoryAppearance(Appearance):
     Attributes:
         style: Rendering style - "tube" or "particle"
         silhouettes: Whether to add silhouette effect
-        blender_instancing: For the "particle" style, how the Blender export
-            carries the particles. True (default) writes each particle's
-            position and color per frame, and Blender turns them into a
-            native point cloud that Cycles renders as exact spheres, with no
-            meshes at all, so 10^5-10^6 particles stay cheap. False bakes
-            PyVista's sphere meshes into Alembic. Tubes are always baked.
+        blender_instancing: How the Blender export carries the trajectories.
+            True (default) writes only points: for the "particle" style each
+            particle's position and color per frame, which Blender turns into
+            a native point cloud that Cycles renders as exact spheres; for
+            the "tube" style each trail's points, which Blender rebuilds as
+            curves and sweeps into tubes (tapered by ``trail_taper``) with a
+            cone at each head. No meshes are stored either way, so 10^4-10^6
+            tracks stay cheap. False bakes PyVista's sphere or tube meshes
+            into Alembic instead.
     """
 
     style: str = "tube"

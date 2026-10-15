@@ -6,6 +6,9 @@ Rendering needs Blender and is exercised by the example scripts; the VDB
 """
 
 import json
+import subprocess
+import sys
+import textwrap
 import warnings
 
 import numpy as np
@@ -235,3 +238,44 @@ def test_camera_below_data_is_checked_once_on_the_kept_camera(tmp_path):
         animation.export(workers=1)
     with pytest.warns(UserWarning, match="below the lowest exported data"):
         animation.assemble()
+
+
+# Runs in a fresh interpreter: the parent starts dask's thread pool, then
+# forked export workers compute with dask inside build_frame.
+FORKED_DASK_SCRIPT = textwrap.dedent("""
+    import sys
+    import dask.array as dask_array
+    import numpy as np
+    import xarray as xr
+    import skyvista as sv
+
+    dask_array.ones((100, 100), chunks=10).sum().compute()
+
+    def build_frame(frame_time):
+        values = dask_array.random.random((4, 4, 4), chunks=2).compute()
+        field = xr.Dataset(
+            {"W": (("z", "y", "x"), values + frame_time)},
+            coords={"x": np.arange(4.0), "y": np.arange(4.0), "z": np.arange(4.0)},
+        )
+        return sv.Scene().add_volume(field, "W")
+
+    animation = sv.BlenderAnimation(
+        sys.argv[1], [0.0, 1.0, 2.0], build_frame, config=sv.BlenderExportConfig()
+    )
+    animation.export(workers=2)
+    print("EXPORTED")
+    """)
+
+
+def test_forked_workers_can_compute_with_dask(tmp_path):
+    # A forked worker inherits the parent's dask thread pool without its
+    # threads; without the worker initializer, its first dask compute waits
+    # forever. The time limit turns such a hang into a failure.
+    completed = subprocess.run(
+        [sys.executable, "-c", FORKED_DASK_SCRIPT, str(tmp_path / "animation")],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "EXPORTED" in completed.stdout

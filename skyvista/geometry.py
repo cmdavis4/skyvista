@@ -181,6 +181,18 @@ class TrajectoryGeometry(Geometry):
         max_points: Keep only the last ``max_points`` times of each track
         particle_radius: Sphere radius (data units) of each particle in the
             "particle" style
+        trail_duration: Keep only the part of each track within this many
+            seconds before the time shown, so every track becomes a trail
+            behind its current position. None keeps the whole history. Applies
+            together with ``max_points``; the shorter one wins.
+        trail_taper: Tube radius at the oldest end of a trail, as a fraction
+            of ``tube_radius`` (the radius at the head). 1 keeps a uniform
+            tube; 0 narrows the trail to a point, like a comet's tail. The
+            radius shrinks linearly with age, measured against
+            ``trail_duration`` when it is set (so a young track that has not
+            yet filled its trail is only partly tapered), else against each
+            trail's own age span. Used by the Blender export of the "tube"
+            style; the PyVista tubes stay uniform.
     """
 
     scalar: Optional[str] = None
@@ -191,6 +203,8 @@ class TrajectoryGeometry(Geometry):
     head_radial_resolution: int = 30
     max_points: Optional[int] = None
     particle_radius: float = 250.0
+    trail_duration: Optional[float] = None
+    trail_taper: float = 1.0
 
 
 @dataclass

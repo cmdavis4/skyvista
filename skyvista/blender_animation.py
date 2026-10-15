@@ -189,6 +189,29 @@ def _link_or_copy(source: Path, destination: Path) -> None:
         shutil.copy2(source, destination)
 
 
+def _start_forked_worker() -> None:
+    """
+    Make a freshly forked worker safe for dask, before it does any work.
+
+    Forking copies a process's memory but only its calling thread. A dask
+    thread pool that the parent already started (for example by a parallel
+    ``xr.open_mfdataset``) is therefore copied as an object whose threads do
+    not exist in the child. The child's first threaded dask computation hands
+    its tasks to that pool and waits forever for results that no thread will
+    produce.
+
+    Each worker therefore switches dask to its synchronous scheduler, which
+    runs every task in the calling thread. Nothing is lost: the parallelism
+    comes from the worker processes themselves. Without dask installed there
+    is nothing to do.
+    """
+    try:
+        import dask
+    except ImportError:
+        return
+    dask.config.set(scheduler="synchronous")
+
+
 def _export_frame_worker(frame_index: int) -> int:
     """Export one frame in a forked worker (see ``_ACTIVE_ANIMATION``)."""
     _ACTIVE_ANIMATION._export_frame(frame_index)
@@ -309,12 +332,23 @@ class BlenderAnimation:
         if frame_dir.exists():
             shutil.rmtree(frame_dir)
         scene = self.build_frame(self.times[frame_index])
+        # A frame's scene usually holds data of its one time only. Trajectory
+        # tracks are the exception: they keep their history, so the trails can
+        # reach back from the frame's time. The bundle must then be told which
+        # of the scene's times is this frame's, or it would hold one frame per
+        # track time. Single-time scenes are exported as before, so a frame
+        # time labelled differently from the data's time cannot break them.
+        frame_times = (
+            [self.times[frame_index]] if len(scene._get_all_times()) > 1 else None
+        )
         with warnings.catch_warnings():
             # Without a camera path, each frame's automatic camera is replaced
             # at assembly by the largest frame's, which is checked there.
             if self.camera_path is None:
                 warnings.filterwarnings("ignore", message=CAMERA_BELOW_DATA_MESSAGE)
-            scene.to_blender(frame_dir, config=self._frame_config(frame_index))
+            scene.to_blender(
+                frame_dir, config=self._frame_config(frame_index), times=frame_times
+            )
         (frame_dir / FRAME_COMPLETE_MARKER).write_text(
             json.dumps({"time_seconds": self.time_seconds(frame_index)})
         )
@@ -366,7 +400,9 @@ class BlenderAnimation:
                     self._report_progress("Export", done_count, len(pending), start)
             else:
                 with ProcessPoolExecutor(
-                    max_workers=workers, mp_context=get_context("fork")
+                    max_workers=workers,
+                    mp_context=get_context("fork"),
+                    initializer=_start_forked_worker,
                 ) as pool:
                     futures = {
                         pool.submit(_export_frame_worker, frame_index): frame_index
@@ -749,7 +785,9 @@ class BlenderAnimation:
                     self._compose_frame(frame_index, figure)
             else:
                 with ProcessPoolExecutor(
-                    max_workers=workers, mp_context=get_context("fork")
+                    max_workers=workers,
+                    mp_context=get_context("fork"),
+                    initializer=_start_forked_worker,
                 ) as pool:
                     for future in as_completed(
                         [pool.submit(_compose_frame_worker, index) for index in pending]

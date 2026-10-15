@@ -28,6 +28,9 @@ It reads the bundle's ``scene.json`` and assembles a ``.blend``:
   tubes with downstream-pointing cones (see ``make_streamline_node_group``);
   with ``arrow_travel_time`` the cones move with the air as the manifest's
   flow clock advances (see ``add_moving_streamline_markers``);
+* trajectory trails: the same polylines carrier, one curve per track ending
+  at its current position, swept into a tube that tapers with age (the
+  ``radius_scales`` array), with one cone on each head;
 * a camera (from the manifest, or a sensible default framing the data);
 * render settings (engine, samples, resolution, Standard view transform).
 
@@ -1312,6 +1315,18 @@ def make_streamline_node_group(name, geometry_spec, material):
     Point attributes (the baked "col_data" color) are interpolated onto the
     tube vertices and the cone points, and realized onto the cones, so one
     GEOMETRY attribute lookup in the material colors both.
+
+    Optional manifest keys, used by trajectory trails:
+
+    - ``profile_vertices``: vertices around the tube (default
+      GLYPH_CROSS_SECTION_VERTICES). Thousands of trails need fewer.
+    - ``curve_resolution``: evaluated points per curve segment (Set Spline
+      Resolution). The curves are Catmull-Rom, so a few points per segment
+      smooth the corners between model output times.
+    - ``radius_scale_attribute``: a point attribute that scales the tube's
+      profile point by point (Curve to Mesh's Scale), for tapered trails.
+    - ``head_cone``: ``{"radius", "length"}`` of one cone on the last point of
+      every curve, aligned with the curve tangent there.
     """
     node_group = bpy.data.node_groups.new(f"{name}_streamlines", "GeometryNodeTree")
     node_group.interface.new_socket(
@@ -1330,13 +1345,33 @@ def make_streamline_node_group(name, geometry_spec, material):
     # ---- Tubes.
     profile = nodes.new("GeometryNodeCurvePrimitiveCircle")
     profile.location = (-650, -150)
-    profile.inputs["Resolution"].default_value = GLYPH_CROSS_SECTION_VERTICES
+    profile.inputs["Resolution"].default_value = int(
+        geometry_spec.get("profile_vertices") or GLYPH_CROSS_SECTION_VERTICES
+    )
     profile.inputs["Radius"].default_value = float(geometry_spec["tube_radius"])
     tubes = nodes.new("GeometryNodeCurveToMesh")
     tubes.location = (-400, 0)
     tubes.inputs["Fill Caps"].default_value = True
-    links.new(group_input.outputs["Geometry"], tubes.inputs["Curve"])
+    # The curves to sweep: as stored, or with a set number of evaluated
+    # points per segment.
+    curves_socket = group_input.outputs["Geometry"]
+    curve_resolution = geometry_spec.get("curve_resolution")
+    if curve_resolution:
+        set_resolution = nodes.new("GeometryNodeSetSplineResolution")
+        set_resolution.location = (-650, 150)
+        set_resolution.inputs["Resolution"].default_value = int(curve_resolution)
+        links.new(curves_socket, set_resolution.inputs["Geometry"])
+        curves_socket = set_resolution.outputs["Geometry"]
+    links.new(curves_socket, tubes.inputs["Curve"])
     links.new(profile.outputs["Curve"], tubes.inputs["Profile Curve"])
+    # A per-point profile scale tapers the tube (trails narrow with age).
+    radius_scale_attribute = geometry_spec.get("radius_scale_attribute")
+    if radius_scale_attribute:
+        radius_scale = nodes.new("GeometryNodeInputNamedAttribute")
+        radius_scale.location = (-650, -300)
+        radius_scale.data_type = "FLOAT"
+        radius_scale.inputs["Name"].default_value = radius_scale_attribute
+        links.new(radius_scale.outputs["Attribute"], tubes.inputs["Scale"])
 
     join = nodes.new("GeometryNodeJoinGeometry")
     join.location = (200, 0)
@@ -1375,6 +1410,22 @@ def make_streamline_node_group(name, geometry_spec, material):
         links.new(markers.outputs["Instances"], realize.inputs["Geometry"])
         links.new(realize.outputs["Geometry"], join.inputs["Geometry"])
 
+    # ---- One cone on the head (last point) of every curve.
+    head_cone = geometry_spec.get("head_cone")
+    if head_cone:
+        head_cone_socket = add_streamline_cone(
+            node_group,
+            {
+                "arrow_head_radius": head_cone["radius"],
+                "arrow_head_length": head_cone["length"],
+            },
+            (-400, -900),
+        )
+        links.new(
+            add_curve_head_cones(node_group, curves_socket, head_cone_socket),
+            join.inputs["Geometry"],
+        )
+
     set_material = nodes.new("GeometryNodeSetMaterial")
     set_material.location = (450, 0)
     set_material.inputs["Material"].default_value = material
@@ -1389,6 +1440,8 @@ TRAVEL_TIME_ATTRIBUTE = "skyvista_travel_time"
 TRAVEL_TIME_START_ATTRIBUTE = "skyvista_travel_time_start"
 TRAVEL_TIME_END_ATTRIBUTE = "skyvista_travel_time_end"
 SPEED_ATTRIBUTE = "skyvista_speed"
+# Per-point tube radius scale of trajectory trails (see make_polyline_curves).
+RADIUS_SCALE_ATTRIBUTE = "skyvista_radius_scale"
 FLOW_CLOCK_NODE = "skyvista_flow_clock"
 # Moving markers grow over this fraction of the marker travel time after
 # entering a streamline, and shrink over it before leaving, so none pops.
@@ -1397,6 +1450,45 @@ MARKER_END_FADE_FRACTION = 0.25
 # marker travel time) is at least this many cone lengths, and shrink in
 # proportion below it, so slow air does not pack them into a solid tube.
 MARKER_FULL_SIZE_GAP_IN_CONE_LENGTHS = 2.0
+
+
+def add_curve_head_cones(node_group, curves_socket, cone_socket):
+    """
+    One cone on the last point of every curve; returns the realized cones.
+
+    Instance on Points works directly on the curves' control points, so the
+    selection and rotation fields are evaluated in the curve context:
+    Endpoint Selection (start 0, end 1) picks each curve's last point, and
+    Curve Tangent there, turned into a rotation of +Z, points the cone along
+    the direction of travel. The cone's base sits on the point, so it leads
+    the trail like an arrowhead. Realizing the instances carries the point's
+    color attribute onto the cone, as for the streamline markers.
+    """
+    nodes = node_group.nodes
+    links = node_group.links
+    # Each curve's last point.
+    last_point = nodes.new("GeometryNodeCurveEndpointSelection")
+    last_point.location = (-400, -1050)
+    last_point.inputs["Start Size"].default_value = 0
+    last_point.inputs["End Size"].default_value = 1
+    # The direction of travel there.
+    tangent = nodes.new("GeometryNodeInputTangent")
+    tangent.location = (-400, -1200)
+    align = nodes.new("FunctionNodeAlignRotationToVector")
+    align.location = (-200, -1200)
+    align.axis = "Z"
+    links.new(tangent.outputs["Tangent"], align.inputs["Vector"])
+    # Instance the cone on those points, then make the cones real geometry.
+    heads = nodes.new("GeometryNodeInstanceOnPoints")
+    heads.location = (0, -1000)
+    links.new(curves_socket, heads.inputs["Points"])
+    links.new(last_point.outputs["Selection"], heads.inputs["Selection"])
+    links.new(cone_socket, heads.inputs["Instance"])
+    links.new(align.outputs["Rotation"], heads.inputs["Rotation"])
+    realize = nodes.new("GeometryNodeRealizeInstances")
+    realize.location = (150, -1000)
+    links.new(heads.outputs["Instances"], realize.inputs["Geometry"])
+    return realize.outputs["Geometry"]
 
 
 def add_streamline_cone(node_group, geometry_spec, location):
@@ -1767,10 +1859,19 @@ def key_flow_clock(node_group, flow_clock):
 
 
 def make_polyline_curves(
-    name, positions, curve_sizes, colors_srgb, travel_times=None, speeds=None
+    name,
+    positions,
+    curve_sizes,
+    colors_srgb,
+    travel_times=None,
+    speeds=None,
+    radius_scales=None,
 ):
     """
     A Curves datablock with one poly curve per streamline and its colors.
+
+    Radius scales (trajectory trails), when given, become the point attribute
+    RADIUS_SCALE_ATTRIBUTE, which scales the swept tube's profile.
 
     Colors arrive as sRGB and are linearized, as for glyph points. Travel
     times (s from each streamline's seed), when given, become the point
@@ -1802,6 +1903,10 @@ def make_polyline_curves(
         curves.attributes.new(SPEED_ATTRIBUTE, "FLOAT", "POINT").data.foreach_set(
             "value", np.asarray(speeds, dtype=np.float32)
         )
+    if radius_scales is not None:
+        curves.attributes.new(
+            RADIUS_SCALE_ATTRIBUTE, "FLOAT", "POINT"
+        ).data.foreach_set("value", np.asarray(radius_scales, dtype=np.float32))
     if travel_times is not None:
         travel_times = np.asarray(travel_times, dtype=np.float32)
         curves.attributes.new(TRAVEL_TIME_ATTRIBUTE, "FLOAT", "POINT").data.foreach_set(
@@ -1822,7 +1927,7 @@ def make_polyline_curves(
 
 def import_polylines(bundle_dir, object_spec, root_empty, frame_start, flow_clock=None):
     """
-    Build streamline tubes from a ``polylines`` manifest entry.
+    Build streamline or trajectory-trail tubes from a ``polylines`` entry.
 
     Each frame's file becomes one Curves object carrying the shared
     streamline geometry-nodes modifier, visible on its own frame only (as for
@@ -1836,6 +1941,12 @@ def import_polylines(bundle_dir, object_spec, root_empty, frame_start, flow_cloc
     n_frames = int(geometry.get("n_frames", 1))
     frame_end = frame_start + n_frames - 1
     material = make_surface_material(name, object_spec["material"])
+    # Trails store per-point radius scales; the tree then reads them.
+    first_polyline_path = bundle_dir / geometry["path_pattern"].replace("####", "0001")
+    with np.load(first_polyline_path) as first_polyline_file:
+        has_radius_scales = "radius_scales" in first_polyline_file.files
+    if has_radius_scales:
+        geometry = {**geometry, "radius_scale_attribute": RADIUS_SCALE_ATTRIBUTE}
     node_group = make_streamline_node_group(name, geometry, material)
     key_flow_clock(node_group, flow_clock)
 
@@ -1861,6 +1972,11 @@ def import_polylines(bundle_dir, object_spec, root_empty, frame_start, flow_cloc
                     else None
                 ),
                 (polyline_file["speeds"] if "speeds" in polyline_file.files else None),
+                (
+                    polyline_file["radius_scales"]
+                    if "radius_scales" in polyline_file.files
+                    else None
+                ),
             )
         curves_object = bpy.data.objects.new(f"{name}_{frame:04d}", curves)
         collection.objects.link(curves_object)

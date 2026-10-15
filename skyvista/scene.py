@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
+import numpy as np
 import pyvista as pv
 import xarray as xr
 
@@ -104,7 +105,17 @@ class Scene:
         # Use dataset id to avoid duplicating bounds for same dataset
         if self.force_bounds:
             ds_id = id(ds)
-            if ds_id not in self._bounds_meshes:
+            if ds_id not in self._bounds_meshes and isinstance(spec, TrajectorySpec):
+                # Trajectory data has no grid: its extent is the range of the
+                # tracks' x, y and z positions.
+                track_bounds = []
+                for coordinate in ("x", "y", "z"):
+                    positions = ds[coordinate].values
+                    track_bounds += [np.nanmin(positions), np.nanmax(positions)]
+                self._bounds_meshes[ds_id] = pv.Box(
+                    bounds=track_bounds
+                ).extract_feature_edges()
+            elif ds_id not in self._bounds_meshes:
                 try:
                     builder = get_grid_builder(ds)
                     self._bounds_meshes[ds_id] = builder.create_bounds_mesh(ds)
@@ -471,6 +482,8 @@ class Scene:
         show_scalar_bar: bool = False,
         silhouettes: bool = False,
         shader: Optional[str] = None,
+        trail_duration: Optional[float] = None,
+        trail_taper: float = 1.0,
         **kwargs,
     ) -> "Scene":
         """
@@ -491,6 +504,14 @@ class Scene:
             shader: Blender shader preset (e.g. "glow" for the emissive,
                 bloom-haloed NCAR "fountain" look); None uses the default matte
                 surface. Only affects the Blender export backend.
+            trail_duration: Show only the last ``trail_duration`` seconds of
+                each track, as a trail behind its current position. None
+                shows the whole history up to the time shown.
+            trail_taper: Tube radius at a trail's oldest end, as a fraction
+                of ``tube_radius`` at its head: 1 keeps a uniform tube, 0
+                narrows it to a point. Used by the Blender export of the
+                "tube" style, which draws each trail as a curve swept into a
+                tube, with a cone at the head when ``head_length_frac`` > 0.
             **kwargs: Additional VarSpec kwargs
 
         Returns:
@@ -511,6 +532,8 @@ class Scene:
             show_scalar_bar=show_scalar_bar,
             silhouettes=silhouettes,
             shader=shader,
+            trail_duration=trail_duration,
+            trail_taper=trail_taper,
             **kwargs,
         )
         return self.add(ds, spec)

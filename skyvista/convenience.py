@@ -629,6 +629,8 @@ def make_trajectory(
     head_radial_resolution: int = 30,
     max_points: Optional[int] = None,
     particle_radius: float = 250.0,
+    trail_duration: Optional[float] = None,
+    trail_taper: float = 1.0,
     # Appearance
     opacity: float = 1.0,
     clim: Optional[Tuple[float, float]] = None,
@@ -657,6 +659,12 @@ def make_trajectory(
         tube_resolution: Number of sides on tube
         head_radial_resolution: Resolution of arrow head
         particle_radius: Sphere radius (data units) for style="particle"
+        trail_duration: Show only the last ``trail_duration`` seconds of each
+            track, as a trail behind its current position (None: the whole
+            history)
+        trail_taper: Tube radius at a trail's oldest end, as a fraction of
+            the radius at its head (1: uniform; 0: narrows to a point). Used
+            by the Blender export of style="tube"
         opacity: Opacity (0.0 to 1.0)
         clim: Color limits
         show_scalar_bar: Show scalar bar
@@ -665,8 +673,9 @@ def make_trajectory(
         shader: Blender shader preset (e.g. "glow" for the emissive, bloom-
             haloed NCAR "fountain" look); None uses the default matte surface.
             Only affects the Blender export backend.
-        blender_instancing: For style="particle", export points that Blender
-            renders as a native point cloud (True), or bake sphere meshes
+        blender_instancing: Export points that Blender turns into a native
+            point cloud (style="particle") or into curves swept into tubes
+            (style="tube"), rather than baking PyVista's meshes (False)
         name: Unique identifier
         empty_ok: Don't skip when mesh is empty
         **kwargs: Additional kwargs
@@ -687,6 +696,8 @@ def make_trajectory(
         head_radial_resolution=head_radial_resolution,
         max_points=max_points,
         particle_radius=particle_radius,
+        trail_duration=trail_duration,
+        trail_taper=trail_taper,
     )
     appearance = TrajectoryAppearance(
         color=color,
