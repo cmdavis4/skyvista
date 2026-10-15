@@ -806,10 +806,11 @@ class Scene:
             build: If True, run Blender headlessly to assemble the ``.blend``.
             render: If True, also render the animation to ``<path>/render/`` in
                 the same headless Blender run. Implies ``build``.
-            blender_executable: Path to the Blender binary for ``build``/
-                ``render``. When None, skyvista resolves it from (in order) the
-                ``SKYVISTA_BLENDER`` environment variable, then ``blender`` on
-                ``PATH``. Pass an explicit path to override both.
+            blender_executable: Path to a Blender program for ``build``/
+                ``render``. When None, skyvista uses (in order) the program
+                named by the ``SKYVISTA_BLENDER`` environment variable, the
+                ``bpy`` module installed by the ``blender`` extra, then
+                ``blender`` on ``PATH``. An explicit path overrides all three.
             quiet: Write Blender's console output to ``<path>/blender.log``
                 instead of the terminal (or notebook). A failed run raises an
                 error that ends with the log's last lines.

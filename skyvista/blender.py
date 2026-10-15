@@ -39,6 +39,12 @@ Requires the ``blender`` extra::
 which pulls in ``alembic3d`` -- the 3D Alembic bindings. NOTE: this is *not*
 the PyPI package ``alembic`` (that is the unrelated SQLAlchemy database
 migration tool); mixing them up is a classic and confusing failure mode.
+
+The extra also installs ``bpy``, Blender built as a Python module, so building
+and rendering need no separate Blender install. skyvista still never imports
+``bpy`` itself: it runs the Blender scripts in a fresh interpreter (see
+:class:`BlenderRunner`). A standalone Blender program can be used instead via
+``blender_executable=`` or ``$SKYVISTA_BLENDER``.
 """
 
 from __future__ import annotations
@@ -48,7 +54,16 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import numpy as np
 
@@ -2908,52 +2923,159 @@ def _copy_build_script(bundle_dir: Path) -> Path:
     return destination
 
 
-def _resolve_blender_executable(explicit: Optional[PathLike] = None) -> str:
+@dataclass(frozen=True)
+class BlenderRunner:
     """
-    Locate the Blender executable, in priority order:
+    How skyvista starts Blender to run a script: as the standalone program, or
+    as the ``bpy`` module in a fresh Python process.
 
-    1. an explicit path/name passed by the caller (``blender_executable=...``),
-    2. the ``SKYVISTA_BLENDER`` environment variable,
-    3. ``blender`` on ``PATH``.
+    Both modes run the same scripts with the same arguments, so callers build
+    every command through :meth:`script_command` and never care which mode is
+    in use:
 
-    Returns an **absolute** path, so the subprocess does not depend on inheriting
-    ``PATH``. That inheritance is exactly what usually breaks this: an IDE or a
-    Jupyter kernel is typically launched with a minimal ``PATH`` that does not
-    include wherever Blender lives (e.g. ``~/programs``), even when your shell
-    profile adds it -- login-shell ``PATH`` edits don't reach those processes.
+    * **Program mode** runs ``blender --background [file.blend] --python
+      script.py -- <arguments>``. ``--python-exit-code 1`` makes an exception
+      in the script exit non-zero, as it does in module mode.
+    * **Module mode** runs ``python run_in_bpy.py <file.blend or ""> script.py
+      -- <arguments>`` with the interpreter that has ``bpy`` installed (the
+      ``blender`` extra). ``run_in_bpy.py`` opens the file and gives the
+      script the same ``sys.argv`` the program would.
 
-    Raises ``FileNotFoundError`` with actionable guidance if none resolve.
+    Module mode always uses a separate process, never ``import bpy`` here:
+    ``bpy`` bundles its own copies of libraries (OpenVDB, OpenImageIO, ...)
+    that can clash with the ones VTK and the export writers load.
+
+    Attributes:
+        executable: Absolute path of the Blender program, or of the Python
+            interpreter that imports ``bpy``.
+        uses_bpy_module: True for module mode.
+    """
+
+    executable: str
+    uses_bpy_module: bool
+
+    def script_command(
+        self,
+        script_path: PathLike,
+        script_arguments: Sequence[str] = (),
+        blend_path: Optional[PathLike] = None,
+    ) -> List[str]:
+        """
+        The command that runs ``script_path`` inside Blender.
+
+        Args:
+            script_path: A Blender script that reads its arguments after
+                ``--`` in ``sys.argv``.
+            script_arguments: Arguments the script sees after ``--``.
+            blend_path: A ``.blend`` to open before the script runs; None
+                starts from Blender's default scene.
+        """
+        script_arguments = [str(argument) for argument in script_arguments]
+        if self.uses_bpy_module:
+            # The launcher takes the file and script positionally, before "--".
+            launcher_path = Path(__file__).parent / "blender_assets" / "run_in_bpy.py"
+            return [
+                self.executable,
+                str(launcher_path),
+                "" if blend_path is None else str(blend_path),
+                str(script_path),
+                "--",
+                *script_arguments,
+            ]
+        command = [self.executable, "--background"]
+        # The program opens a .blend given before --python.
+        if blend_path is not None:
+            command.append(str(blend_path))
+        return command + [
+            "--python-exit-code",
+            "1",
+            "--python",
+            str(script_path),
+            "--",
+            *script_arguments,
+        ]
+
+
+def _bpy_module_is_installed() -> bool:
+    """
+    Whether this interpreter can import ``bpy``, checked without importing it.
+
+    ``find_spec`` only locates the package. Importing it would load all of
+    Blender into this process, which is slow and is what module mode avoids.
+    """
+    import importlib.util
+
+    return importlib.util.find_spec("bpy") is not None
+
+
+def _resolve_blender_runner(explicit: Optional[PathLike] = None) -> BlenderRunner:
+    """
+    Decide how to run Blender, in priority order:
+
+    1. an explicit Blender program passed by the caller
+       (``blender_executable=...``);
+    2. the Blender program named by the ``SKYVISTA_BLENDER`` environment
+       variable;
+    3. the ``bpy`` module, if this interpreter has it (``pip install
+       skyvista[blender]``), run by this same interpreter
+       (``sys.executable``);
+    4. ``blender`` on ``PATH``.
+
+    The two explicit choices come first, so a user can always pin a specific
+    Blender version over the installed module.
+
+    Program paths are returned **absolute**, so the subprocess does not depend
+    on inheriting ``PATH``. That inheritance is what usually breaks: an IDE or
+    a Jupyter kernel is often launched with a minimal ``PATH`` that does not
+    include wherever Blender lives (e.g. ``~/programs``), even when the shell
+    profile adds it.
+
+    Raises ``FileNotFoundError`` with actionable guidance if nothing resolves.
     """
     import os
     import shutil
+    import sys
 
-    candidates = [
-        str(explicit),
+    # Explicit choices of the Blender program, highest priority first.
+    explicit_candidates = [
+        str(explicit) if explicit else None,
         os.environ.get("SKYVISTA_BLENDER"),
-        "blender",
     ]
-    for candidate in candidates:
+    for candidate in explicit_candidates:
         if not candidate:
             continue
         # shutil.which handles both a bare name (searched on PATH) and an
         # absolute/relative path (returned if it exists and is executable).
         resolved = shutil.which(candidate)
         if resolved:
-            return resolved
+            return BlenderRunner(executable=resolved, uses_bpy_module=False)
 
+    # The bpy module from the blender extra, run by this same interpreter.
+    if _bpy_module_is_installed():
+        return BlenderRunner(executable=sys.executable, uses_bpy_module=True)
+
+    # Last resort: a Blender program on PATH.
+    resolved = shutil.which("blender")
+    if resolved:
+        return BlenderRunner(executable=resolved, uses_bpy_module=False)
+
+    tried = [candidate for candidate in explicit_candidates if candidate]
     raise FileNotFoundError(
-        "Could not find the Blender executable. Set it in any of these ways:\n"
+        "Could not find Blender. Provide it in any of these ways:\n"
+        "  - pip install skyvista[blender], which installs Blender as the\n"
+        "    'bpy' module (Python 3.13; Linux x86-64, Apple-silicon macOS,\n"
+        "    Windows)\n"
         "  - pass blender_executable='/path/to/blender' to"
         " Scene.to_blender(...)\n  - export SKYVISTA_BLENDER=/path/to/blender"
         " in the environment that\n    launches Python (note: an IDE/Jupyter"
         " kernel may not read your\n    shell profile, so setting it there is"
         " more reliable than PATH)\n  - put 'blender' on PATH\nTried:"
-        f" {[c for c in candidates if c]}"
+        f" {tried + ['bpy module', 'blender']}"
     )
 
 
 def _launch_blender_build(
-    blender_executable: Optional[PathLike],
+    blender_executable: Union[None, PathLike, BlenderRunner],
     build_script_path: Path,
     bundle_dir: Path,
     render: bool = False,
@@ -2962,30 +3084,31 @@ def _launch_blender_build(
     """
     Run the build script in Blender headlessly.
 
-    ``blender --background --python build_scene.py -- <bundle> [--render]``.
-    With ``render`` the build also renders the animation to ``<bundle>/render/``.
-    ``blender_executable`` is resolved via :func:`_resolve_blender_executable`.
+    The script runs with ``-- <bundle> [--render]``; with ``render`` the build
+    also renders the animation to ``<bundle>/render/``. Blender is the
+    program or the ``bpy`` module, as :func:`_resolve_blender_runner`
+    decides from ``blender_executable``. A caller that has already resolved
+    a :class:`BlenderRunner` may pass it instead.
 
     Blender's console output goes to the terminal, or with ``log_path`` to
     that file (overwritten). A failed run then raises a ``RuntimeError``
     whose message ends with the log's last lines, so the cause is visible
     without opening the file.
     """
+    import shlex
     import subprocess
 
-    resolved_executable = _resolve_blender_executable(blender_executable)
-    command = [
-        resolved_executable,
-        "--background",
-        "--python",
-        str(build_script_path),
-        "--",
-        str(bundle_dir),
-    ]
+    runner = (
+        blender_executable
+        if isinstance(blender_executable, BlenderRunner)
+        else _resolve_blender_runner(blender_executable)
+    )
+    build_arguments = [str(bundle_dir)]
     if render:
-        command.append("--render")
+        build_arguments.append("--render")
+    command = runner.script_command(build_script_path, build_arguments)
     if log_path is None:
-        print("Running:", " ".join(command))
+        print("Running:", shlex.join(command))
         subprocess.run(command, check=True)
         return
 

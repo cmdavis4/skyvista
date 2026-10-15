@@ -35,7 +35,9 @@ python = "3.13.*"
 # Blender 5.0.1's bundled OpenVDB refuses to read ("expected version 224 or
 # earlier, got version 225"). 12.x writes format 224, which Blender reads. The
 # Python write() API exposes no way to downgrade the format, so this must be
-# controlled by the library version.
+# controlled by the library version. The bpy module (Blender 5.2, bundling
+# OpenVDB 13) reads both formats; the pin only keeps standalone Blender 5.0
+# programs (via $SKYVISTA_BLENDER) working.
 openvdb = "<13"
 hdf5plugin = ">=7.1.0,<8"
 
@@ -53,11 +55,17 @@ xarrams = ">=1.1.0"
 # osx-64 (Intel Mac). Scope the dep per-platform so solving the blender env for
 # osx-64 doesn't fail on the missing wheel; mesh export is simply unavailable
 # there (volumes via conda openvdb still work).
+#
+# bpy is Blender built as a Python module (the same requirement as the pip
+# 'blender' extra). Its 5.1+ wheels are CPython 3.13 only, and also skip
+# osx-64; there, set $SKYVISTA_BLENDER to a standalone Blender program.
 [feature.blender.target.osx-arm64.pypi-dependencies]
 alembic3d = ">=1.8.12"
+bpy = ">=5.1,<6"
 
 [feature.blender.target.linux-64.pypi-dependencies]
 alembic3d = ">=1.8.12"
+bpy = ">=5.1,<6"
 
 [environments]
 # Default environment - includes test feature so `pixi run test` works

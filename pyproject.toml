@@ -51,8 +51,14 @@ dev = [
 # which have NO PyPI wheel for recent Python -- install via conda-forge
 # ('conda install -c conda-forge openvdb', or add 'openvdb' to a pixi feature).
 # Mesh export (contours/slices/vectors/trajectories) needs only this pip extra.
+#
+# 'bpy' is Blender itself, built as a Python module, so building and rendering
+# need no separate Blender install. bpy 5.1+ ships wheels only for CPython 3.13,
+# and only on Linux x86-64, Apple-silicon macOS and Windows. Elsewhere, point
+# skyvista at a standalone Blender program ($SKYVISTA_BLENDER) instead.
 blender = [
     "alembic3d; python_version < '3.14'",
+    "bpy>=5.1,<6; python_version == '3.13' and ((sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'darwin' and platform_machine == 'arm64') or sys_platform == 'win32')",
 ]
 
 [project.urls]

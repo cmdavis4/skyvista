@@ -639,9 +639,9 @@ class BlenderAnimation:
             threads: CPU threads per process; None splits the machine's cores
                 evenly between the processes.
         """
-        from .blender import _launch_blender_build, _resolve_blender_executable
+        from .blender import _launch_blender_build, _resolve_blender_runner
 
-        executable = _resolve_blender_executable(blender_executable)
+        runner = _resolve_blender_runner(blender_executable)
         manifest_path = self.bundle_dir / "scene.json"
         blend_path = self.bundle_dir / f"{self.bundle_dir.name}.blend"
         if (
@@ -651,7 +651,7 @@ class BlenderAnimation:
             # The build's console output goes with the render logs.
             (self.bundle_dir / "render_logs").mkdir(exist_ok=True)
             _launch_blender_build(
-                executable,
+                runner,
                 self.bundle_dir / "build_scene.py",
                 self.bundle_dir,
                 log_path=self.bundle_dir / "render_logs" / "build.log",
@@ -670,19 +670,20 @@ class BlenderAnimation:
             return
 
         threads = threads or max(1, (os.cpu_count() or 1) // processes)
+        # Packaged with skyvista; it renders whichever .blend is already open.
+        render_script_path = (
+            Path(__file__).parent / "blender_assets" / "render_blend.py"
+        )
         logs_dir = self.bundle_dir / "render_logs"
         logs_dir.mkdir(exist_ok=True)
         running = []
         for process_index in range(processes):
             log_file = open(logs_dir / f"process_{process_index + 1}.log", "a")
-            command = [
-                executable,
-                "--background",
-                str(blend_path),
-                "--threads",
-                str(threads),
-                "--render-anim",
-            ]
+            # Open the saved .blend and render its animation with a fixed
+            # thread count (the scripted form of `blender -b file -t N -a`).
+            command = runner.script_command(
+                render_script_path, [str(threads)], blend_path=blend_path
+            )
             running.append(
                 (
                     subprocess.Popen(

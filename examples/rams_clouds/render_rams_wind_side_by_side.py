@@ -74,7 +74,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--blender",
         default=None,
-        help="Blender executable (default: $SKYVISTA_BLENDER, then PATH).",
+        help="Blender executable (default: $SKYVISTA_BLENDER, the bpy module, then PATH).",
     )
     parser.add_argument(
         "--slice-y",

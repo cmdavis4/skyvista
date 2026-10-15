@@ -18,8 +18,9 @@ It reads the bundle's ``scene.json`` and assembles a ``.blend``:
   are driven by the named grid through a color ramp rebuilt from the bundle's
   colormap LUT;
 * physically rendered clouds: a VDB sequence with one extinction grid per
-  hydrometeor species, rendered by one Volume Scatter closure per species
-  summed in a single shader (see ``make_cloud_material``);
+  hydrometeor species, rendered by summed Volume Scatter closures in a single
+  shader, one per distinct phase function (species sharing one are merged;
+  see ``make_cloud_material``);
 * vector glyphs: per-frame point files (position, vector, color) turned into
   point clouds, on which a geometry-nodes tree instances one arrow per point,
   aligned with and scaled by its vector (see ``make_glyph_node_group``);
@@ -522,29 +523,90 @@ def _cutaway_mask(nodes, links, cutaway_spec):
     return kept.outputs["Value"]
 
 
+def _cloud_phase_groups(nodes, material_name, species_specs):
+    """
+    Group cloud species that render with the same phase function.
+
+    Cycles keeps at most 8 volume phase functions at a point, counting every
+    closure with non-zero density, and does NOT merge identical ones first.
+    Closures past the eighth keep their extinction but lose their phase
+    function. Seven species plus the two closures of an enclosing
+    aerial-perspective haze box therefore lose one (Blender 5.0.1 and 5.2.2:
+    with nine distinct g values the render depends on closure order; with
+    eight it does not).
+
+    Two Volume Scatter closures with the same phase function are physically
+    one closure with their densities summed, so merging such species is
+    exact and frees closure slots. In the RAMS preset, pristine ice, snow,
+    aggregates and graupel all render with g = 0.5, which takes the cloud
+    material from 7 closures to 4.
+
+    Henyey-Greenstein species group by anisotropy (rounded to 1e-6, so
+    float noise does not split a group). A species using the Mie phase
+    function stays alone, since its phase varies per voxel with its own
+    droplet-diameter grid. A requested Mie phase that this Blender lacks
+    falls back to Henyey-Greenstein g = 0.86 *before* grouping, so it can
+    still merge.
+
+    Returns:
+        A list of ``(phase_function, anisotropy, species_list)`` tuples in
+        order of first appearance; ``anisotropy`` is None for Mie.
+    """
+    # Probe once whether this Blender's Volume Scatter offers a Mie phase.
+    probe_node = nodes.new("ShaderNodeVolumeScatter")
+    mie_is_available = _set_volume_scatter_phase(probe_node, "mie")
+    nodes.remove(probe_node)
+
+    groups = {}
+    for species_index, species in enumerate(species_specs):
+        wants_mie = species.get("phase_function") == "mie"
+        if wants_mie and mie_is_available:
+            # Per-voxel diameters differ between species: never merged.
+            group_key = ("mie", species_index)
+            group_anisotropy = None
+        else:
+            if wants_mie:
+                print(
+                    f"  [WARN] {material_name}: no Mie phase in this Blender; "
+                    f"{species['name']} falls back to Henyey-Greenstein g=0.86"
+                )
+            anisotropy = species.get("anisotropy")
+            group_anisotropy = float(0.86 if anisotropy is None else anisotropy)
+            group_key = ("henyey_greenstein", round(group_anisotropy, 6))
+        if group_key not in groups:
+            groups[group_key] = (group_key[0], group_anisotropy, [])
+        groups[group_key][2].append(species)
+    # Dicts keep insertion order, so groups follow the manifest's species order.
+    return list(groups.values())
+
+
 def make_cloud_material(name, material_spec):
     """
     Build the physically based cloud shader from a manifest cloud material.
 
-    Every species contributes one Volume Scatter closure::
+    Species that share a phase function share one Volume Scatter closure
+    (see :func:`_cloud_phase_groups`)::
 
-        Attribute(extinction_<species>, km^-1)
-          -> x (0.001 * extinction_scale)        [km^-1 -> m^-1]
-          -> Volume Scatter(Density, white, phase of that species)
+        sum over the group's species of
+            Attribute(extinction_<species>, km^-1)
+              -> x (0.001 * extinction_scale)    [km^-1 -> m^-1]
+          -> x cutaway mask (optional)
+          -> Volume Scatter(Density, white, the group's phase function)
 
-    and the closures are summed with Add Shader nodes. Summing is exact: for a
-    mixture of independent scatterers the extinction coefficients add, and the
-    effective phase function is the scattering-weighted mean of the species'
-    phase functions, which is what Cycles samples from a sum of closures. No
-    absorption closure is added because water and ice absorb negligibly in
-    the visible (single-scattering albedo 1 to better than 1e-4).
+    and the group closures are summed with Add Shader nodes. Summing is
+    exact: for a mixture of independent scatterers the extinction
+    coefficients add, and the effective phase function is the
+    scattering-weighted mean of the species' phase functions, which is what
+    Cycles samples from a sum of closures. No absorption closure is added
+    because water and ice absorb negligibly in the visible (single-scattering
+    albedo 1 to better than 1e-4). Every species keeps its own grid and
+    Attribute node, so the .blend stays editable per species.
 
-    With three or more species Cycles prints "Maximum number of closures
+    With three or more closures Cycles prints "Maximum number of closures
     exceeded: 96 > 64". That count is a conservative compile-time estimate
-    (32 slots reserved per volume closure). It is harmless here: the render
-    does not depend on the order of the species' closures, which it would if
-    any were dropped (checked in Blender 5.0.1 with three and with eight
-    distinct g values).
+    (32 slots reserved per volume closure) and drops nothing by itself. The
+    limit that does drop phase functions is 8 per point, which grouping
+    keeps the cloud (plus haze) under.
 
     Units: the grids are in km^-1, and the shader converts them to m^-1. The
     volume object's render space is set to OBJECT, where one unit is one meter
@@ -578,65 +640,83 @@ def make_cloud_material(name, material_spec):
     # Optional cutaway: a 0/1 mask, 0 on the removed side of the plane.
     cutaway_mask_socket = _cutaway_mask(nodes, links, material_spec.get("cutaway"))
 
+    # Species with the same phase function become one closure.
+    phase_groups = _cloud_phase_groups(nodes, name, material_spec.get("species", []))
+
     accumulated_shader_socket = None
-    for species_index, species in enumerate(material_spec.get("species", [])):
-        row_y = -300 * species_index
+    # Node rows are laid out one per species, top to bottom.
+    species_row = 0
+    for phase_function, anisotropy, group_species in phase_groups:
+        group_names = " + ".join(species["name"] for species in group_species)
+        group_row_y = -300 * species_row
 
-        # Extinction grid of this species, converted to m^-1.
-        extinction_attribute = nodes.new("ShaderNodeAttribute")
-        extinction_attribute.attribute_name = species["extinction_grid"]
-        extinction_attribute.label = f"{species['name']} extinction (km^-1)"
-        extinction_attribute.location = (-800, row_y)
-        to_per_meter = nodes.new("ShaderNodeMath")
-        to_per_meter.operation = "MULTIPLY"
-        to_per_meter.label = f"{species['name']}: km^-1 -> m^-1"
-        to_per_meter.inputs[1].default_value = density_factor
-        to_per_meter.location = (-600, row_y)
-        links.new(extinction_attribute.outputs["Fac"], to_per_meter.inputs[0])
+        # The group's total extinction in m^-1, summed over its species.
+        group_density_socket = None
+        for species in group_species:
+            row_y = -300 * species_row
+            species_row += 1
 
-        # Pure, spectrally neutral scattering with this species' phase function.
-        scatter = nodes.new("ShaderNodeVolumeScatter")
-        scatter.label = f"{species['name']} scattering"
-        scatter.location = (-350, row_y)
-        scatter.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
-        density_socket = to_per_meter.outputs[0]
+            # Extinction grid of this species, converted to m^-1.
+            extinction_attribute = nodes.new("ShaderNodeAttribute")
+            extinction_attribute.attribute_name = species["extinction_grid"]
+            extinction_attribute.label = f"{species['name']} extinction (km^-1)"
+            extinction_attribute.location = (-1000, row_y)
+            to_per_meter = nodes.new("ShaderNodeMath")
+            to_per_meter.operation = "MULTIPLY"
+            to_per_meter.label = f"{species['name']}: km^-1 -> m^-1"
+            to_per_meter.inputs[1].default_value = density_factor
+            to_per_meter.location = (-800, row_y)
+            links.new(extinction_attribute.outputs["Fac"], to_per_meter.inputs[0])
+
+            # Add this species' extinction to the group's running total.
+            if group_density_socket is None:
+                group_density_socket = to_per_meter.outputs[0]
+            else:
+                add_extinction = nodes.new("ShaderNodeMath")
+                add_extinction.operation = "ADD"
+                add_extinction.label = f"{group_names}: total extinction"
+                add_extinction.location = (-600, row_y)
+                links.new(group_density_socket, add_extinction.inputs[0])
+                links.new(to_per_meter.outputs[0], add_extinction.inputs[1])
+                group_density_socket = add_extinction.outputs[0]
+
         if cutaway_mask_socket is not None:
             # No extinction on the cut-away side.
             cut = nodes.new("ShaderNodeMath")
             cut.operation = "MULTIPLY"
-            cut.label = f"{species['name']}: cutaway"
-            cut.location = (-480, row_y)
-            links.new(density_socket, cut.inputs[0])
+            cut.label = f"{group_names}: cutaway"
+            cut.location = (-480, group_row_y)
+            links.new(group_density_socket, cut.inputs[0])
             links.new(cutaway_mask_socket, cut.inputs[1])
-            density_socket = cut.outputs[0]
-        links.new(density_socket, scatter.inputs["Density"])
+            group_density_socket = cut.outputs[0]
 
-        wants_mie = species.get("phase_function") == "mie"
-        if wants_mie and _set_volume_scatter_phase(scatter, "mie"):
+        # Pure, spectrally neutral scattering with the group's phase function.
+        scatter = nodes.new("ShaderNodeVolumeScatter")
+        scatter.label = f"{group_names} scattering"
+        scatter.location = (-350, group_row_y)
+        scatter.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+        links.new(group_density_socket, scatter.inputs["Density"])
+
+        # The phase must be set before its input ("Diameter" or
+        # "Anisotropy") is looked up; see _set_volume_scatter_phase.
+        _set_volume_scatter_phase(scatter, phase_function)
+        if phase_function == "mie":
             # Per-voxel droplet diameter (um) drives the Mie fit.
+            (mie_species,) = group_species
             diameter_attribute = nodes.new("ShaderNodeAttribute")
-            diameter_attribute.attribute_name = species["mie_diameter_grid"]
-            diameter_attribute.label = f"{species['name']} Mie diameter (um)"
-            diameter_attribute.location = (-600, row_y - 150)
+            diameter_attribute.attribute_name = mie_species["mie_diameter_grid"]
+            diameter_attribute.label = f"{mie_species['name']} Mie diameter (um)"
+            diameter_attribute.location = (-600, group_row_y - 150)
             links.new(diameter_attribute.outputs["Fac"], scatter.inputs["Diameter"])
         else:
-            if wants_mie:
-                print(
-                    f"  [WARN] {name}: no Mie phase in this Blender; "
-                    f"{species['name']} falls back to Henyey-Greenstein g=0.86"
-                )
-            _set_volume_scatter_phase(scatter, "henyey_greenstein")
-            anisotropy = species.get("anisotropy")
-            scatter.inputs["Anisotropy"].default_value = float(
-                0.86 if anisotropy is None else anisotropy
-            )
+            scatter.inputs["Anisotropy"].default_value = anisotropy
 
-        # Sum this species' closure into the mixture.
+        # Sum this group's closure into the mixture.
         if accumulated_shader_socket is None:
             accumulated_shader_socket = scatter.outputs[0]
         else:
             add_shader = nodes.new("ShaderNodeAddShader")
-            add_shader.location = (0, row_y)
+            add_shader.location = (0, group_row_y)
             links.new(accumulated_shader_socket, add_shader.inputs[0])
             links.new(scatter.outputs[0], add_shader.inputs[1])
             accumulated_shader_socket = add_shader.outputs[0]

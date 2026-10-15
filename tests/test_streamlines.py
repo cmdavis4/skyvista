@@ -6,8 +6,6 @@ placement inside Blender were checked on a rendered vortex.
 """
 
 import json
-import os
-import shutil
 import subprocess
 import textwrap
 
@@ -16,6 +14,7 @@ import pytest
 import xarray as xr
 
 import skyvista as sv
+from skyvista.blender import _resolve_blender_runner
 
 
 def vortex_field(points):
@@ -209,9 +208,12 @@ def test_hold_needs_a_single_time(vortex_dataset, tmp_path):
         scene.to_blender(tmp_path / "bundle", config=config)
 
 
-def find_blender():
-    """A Blender executable from $SKYVISTA_BLENDER or the PATH, or None."""
-    return os.environ.get("SKYVISTA_BLENDER") or shutil.which("blender")
+def find_blender_runner():
+    """How skyvista would run Blender here (program or bpy module), or None."""
+    try:
+        return _resolve_blender_runner()
+    except FileNotFoundError:
+        return None
 
 
 # Runs inside Blender: prints the x of every cone tip (the only vertices on
@@ -249,7 +251,7 @@ CONE_TIP_PROBE = textwrap.dedent("""
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(find_blender() is None, reason="needs Blender")
+@pytest.mark.skipif(find_blender_runner() is None, reason="needs Blender")
 def test_markers_move_with_the_air(tmp_path):
     # A straight streamline in a 10 m/s wind, markers every 100 s of travel
     # (1000 m apart), the clock advancing 20 s per frame: every cone moves
@@ -269,21 +271,13 @@ def test_markers_move_with_the_air(tmp_path):
         hold=sv.BlenderHoldConfig(n_frames=3, clock_seconds_per_frame=20.0)
     )
     bundle_dir = tmp_path / "bundle"
-    scene.to_blender(
-        bundle_dir, config=config, build=True, blender_executable=find_blender()
-    )
+    scene.to_blender(bundle_dir, config=config, build=True)
     probe_path = tmp_path / "probe.py"
     probe_path.write_text(CONE_TIP_PROBE)
     completed = subprocess.run(
-        [
-            find_blender(),
-            "--background",
-            str(bundle_dir / "bundle.blend"),
-            "--python",
-            str(probe_path),
-            "--",
-            "[1, 2]",
-        ],
+        find_blender_runner().script_command(
+            probe_path, ["[1, 2]"], blend_path=bundle_dir / "bundle.blend"
+        ),
         capture_output=True,
         text=True,
         check=True,
