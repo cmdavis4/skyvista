@@ -166,15 +166,6 @@ def parse_arguments() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--arrow-panel-aim-shift",
-        type=float,
-        default=0.0,
-        help=(
-            "With --arrow-panel-zoom, move the arrow panel's aim point up (m),"
-            " or down if negative, to keep labels clear of the arrows."
-        ),
-    )
-    parser.add_argument(
         "--cloud-mixing-ratio",
         type=float,
         default=1.0e-5,
@@ -439,8 +430,7 @@ def main() -> None:
         wind_config.camera.look_at = (
             float(drawn_x_values.min() + drawn_x_values.max()) / 2.0,
             float(wind_plane["y"].values[0]),
-            float(drawn_z_values.min() + drawn_z_values.max()) / 2.0
-            + arguments.arrow_panel_aim_shift,
+            float(drawn_z_values.min() + drawn_z_values.max()) / 2.0,
         )
         wind_config.camera.lens_mm *= arguments.arrow_panel_zoom
 
