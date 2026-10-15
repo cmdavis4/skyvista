@@ -146,6 +146,16 @@ def parse_arguments() -> argparse.Namespace:
         help="Arrows within this distance (m) of cloud are always kept.",
     )
     parser.add_argument(
+        "--zoom",
+        type=float,
+        default=1.35,
+        help=(
+            "Factor on the focal length of both panels. The camera stays where"
+            " the automatic framing puts it, so this narrows the view onto the"
+            " storm without changing the perspective."
+        ),
+    )
+    parser.add_argument(
         "--cloud-mixing-ratio",
         type=float,
         default=1.0e-5,
@@ -350,9 +360,11 @@ def main() -> None:
 
     # ---- Left panel: the physically based cloud, automatic camera.
     realistic_dir = arguments.output_dir / "realistic"
+    realistic_config = make_cloud_export_config(arguments)
+    realistic_config.camera.lens_mm *= arguments.zoom
     sv.Scene().add_clouds(clouds, microphysics="rams").to_blender(
         realistic_dir,
-        config=make_cloud_export_config(arguments),
+        config=realistic_config,
         render=True,
         blender_executable=arguments.blender,
     )
@@ -362,6 +374,7 @@ def main() -> None:
     wind_config = make_cloud_export_config(arguments, origin_shift=origin_shift)
     wind_config.camera.location = camera_location
     wind_config.camera.look_at = camera_look_at
+    wind_config.camera.lens_mm *= arguments.zoom
     # The figure draws its own, larger colorbar.
     wind_config.overlay_colorbars = False
 
