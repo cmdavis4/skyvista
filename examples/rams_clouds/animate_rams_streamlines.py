@@ -39,7 +39,6 @@ from cloud_render_config import add_render_arguments, make_cloud_export_config
 from rams_lite_loader import load_rams_lite_hydrometeors, load_rams_lite_winds
 from render_rams_streamlines_side_by_side import (
     STREAMLINE_COLORMAP,
-    pinned_view,
     storm_motion_estimate,
 )
 
@@ -119,20 +118,16 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def side_by_side_view(arguments, clouds) -> tuple:
+def side_by_side_view(arguments, clouds) -> sv.BlenderView:
     """
-    The camera of the side-by-side figure: (location, aim point, origin shift).
+    The camera and scene origin of the side-by-side figure.
 
     That figure frames the physically based cloud automatically and pins its
-    streamline panel to the same view. Exporting the cloud alone (no Blender
-    run) gives the same automatic framing here.
+    streamline panel to the same view. The cloud alone, with the same
+    settings, therefore gives the same view here.
     """
-    framing_dir = arguments.output_dir / "framing"
-    if not (framing_dir / "scene.json").exists():
-        sv.Scene().add_clouds(clouds, microphysics="rams").to_blender(
-            framing_dir, config=make_cloud_export_config(arguments)
-        )
-    return pinned_view(framing_dir)
+    cloud_scene = sv.Scene().add_clouds(clouds, microphysics="rams")
+    return cloud_scene.blender_view(make_cloud_export_config(arguments))
 
 
 def make_figure(arguments, minutes: float, storm_motion: tuple) -> sv.compose.Figure:
@@ -194,10 +189,9 @@ def main() -> None:
     minutes = float(clouds["time"]) / 60.0
 
     # ---- The side-by-side figure's view and look.
-    camera_location, camera_look_at, origin_shift = side_by_side_view(arguments, clouds)
-    config = make_cloud_export_config(arguments, origin_shift=origin_shift)
-    config.camera.location = camera_location
-    config.camera.look_at = camera_look_at
+    config = make_cloud_export_config(arguments).use_view(
+        side_by_side_view(arguments, clouds)
+    )
     config.world.aerial_perspective = True
     config.world.visibility_km = arguments.visibility_km
     config.overlay_colorbars = False

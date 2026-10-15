@@ -128,6 +128,15 @@ class BlenderTransform:
         }
 
 
+# Named render qualities: (samples per pixel, (width, height) in pixels).
+# "preview" renders a mature storm in seconds to a few minutes and is meant
+# for choosing a camera, sun and colors. "final" is the default render setting.
+RENDER_QUALITY_PRESETS: Dict[str, Tuple[int, Tuple[int, int]]] = {
+    "preview": (16, (960, 540)),
+    "final": (128, (1920, 1080)),
+}
+
+
 @dataclass
 class BlenderRenderConfig:
     """
@@ -163,6 +172,25 @@ class BlenderRenderConfig:
     volume_bounces: Optional[int] = None
     exposure: Optional[float] = None
     denoise: bool = True
+
+    def set_quality(self, quality: str) -> "BlenderRenderConfig":
+        """
+        Set the samples and resolution from a named preset.
+
+        The presets are listed in ``RENDER_QUALITY_PRESETS``: "preview" (16
+        samples, 960 x 540) and "final" (128 samples, 1920 x 1080). Set
+        ``resolution`` afterwards to keep a preset's samples at another size.
+
+        Returns:
+            This config, changed in place, for chaining.
+        """
+        if quality not in RENDER_QUALITY_PRESETS:
+            raise ValueError(
+                f"Unknown render quality {quality!r}; choose one of "
+                f"{sorted(RENDER_QUALITY_PRESETS)}."
+            )
+        self.samples, self.resolution = RENDER_QUALITY_PRESETS[quality]
+        return self
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -221,6 +249,68 @@ class BlenderCameraConfig:
     )
     location: Optional[Tuple[float, float, float]] = None
     look_at: Optional[Tuple[float, float, float]] = None
+
+
+@dataclass(frozen=True)
+class BlenderView:
+    """
+    A fixed camera and scene origin, shared by several exports.
+
+    A side-by-side figure needs every panel framed the same way. The automatic
+    camera cannot do that by itself, because it frames each export's own data
+    bounds, and a panel with a thinned cloud plus arrows has other bounds than
+    a plain cloud. The fix is to take the camera of one export and give it to
+    the others. ``BlenderExportConfig.use_view`` applies a view to a config.
+
+    The origin shift is part of the view: it is the data point that Blender
+    puts at its origin, and the camera position is stored in data units, but
+    the ground plane and the haze box are placed relative to the origin.
+
+    Get a view in one of two ways:
+
+    - :meth:`from_bundle` reads it from an export that already exists.
+    - :meth:`skyvista.Scene.blender_view` computes the automatic camera of a
+      scene, without rendering it.
+
+    Attributes:
+        location: Camera position in data (physical) coordinates.
+        look_at: The data point the camera aims at.
+        lens_mm: Camera focal length in millimeters.
+        origin_shift: Data point mapped to the Blender origin.
+    """
+
+    location: Tuple[float, float, float]
+    look_at: Tuple[float, float, float]
+    lens_mm: float
+    origin_shift: Tuple[float, float, float]
+
+    @classmethod
+    def from_bundle(cls, bundle_dir: PathLike) -> "BlenderView":
+        """
+        Read the camera and origin shift of an exported bundle.
+
+        Only a static camera has a single view, so a bundle whose camera
+        moves (several keyframes) is refused.
+        """
+        manifest = json.loads((Path(bundle_dir) / "scene.json").read_text())
+        camera = manifest["camera"]
+        if camera is None:
+            raise ValueError(f"The bundle {bundle_dir} has no camera.")
+        keyframes = camera["keyframes"]
+        if len(keyframes) != 1:
+            raise ValueError(
+                f"The bundle {bundle_dir} has a moving camera with "
+                f"{len(keyframes)} keyframes; a view needs a static camera."
+            )
+        (keyframe,) = keyframes
+        return cls(
+            location=tuple(float(value) for value in keyframe["location"]),
+            look_at=tuple(float(value) for value in keyframe["look_at"]),
+            lens_mm=float(camera["lens_mm"]),
+            origin_shift=tuple(
+                float(value) for value in manifest["transform"]["origin_shift"]
+            ),
+        )
 
 
 # Named world/lighting looks the build script knows how to construct. Kept here
@@ -400,7 +490,9 @@ class BlenderExportConfig:
     hold: Optional[BlenderHoldConfig] = None
 
     @classmethod
-    def for_clouds(cls, **overrides) -> "BlenderExportConfig":
+    def for_clouds(
+        cls, quality: Optional[str] = None, **overrides
+    ) -> "BlenderExportConfig":
         """
         Defaults for a physically rendered cloud scene.
 
@@ -410,6 +502,12 @@ class BlenderExportConfig:
         general default (10 deg elevation, 1.2 bounding-box diagonals, 35 mm),
         which is how clouds are usually seen. Pass any field as a keyword to
         override it, e.g. ``for_clouds(fps=12)``.
+
+        Args:
+            quality: A render quality preset ("preview" or "final", see
+                :meth:`BlenderRenderConfig.set_quality`). None keeps the
+                "final" settings.
+            **overrides: Fields of this config to replace.
         """
         config = cls(
             world=BlenderWorldConfig(preset="physical_sky", ground_albedo=0.15),
@@ -417,9 +515,28 @@ class BlenderExportConfig:
                 elevation_deg=10.0, distance_factor=1.2, lens_mm=35.0
             ),
         )
+        if quality is not None:
+            config.render.set_quality(quality)
         for field_name, value in overrides.items():
             setattr(config, field_name, value)
         return config
+
+    def use_view(self, view: "BlenderView") -> "BlenderExportConfig":
+        """
+        Pin this config to a fixed camera and scene origin (see BlenderView).
+
+        Sets ``camera.location``, ``camera.look_at``, ``camera.lens_mm`` and
+        ``transform.origin_shift``. Change ``camera.lens_mm`` afterwards to
+        zoom one panel of a figure without moving its camera.
+
+        Returns:
+            This config, changed in place, for chaining.
+        """
+        self.camera.location = view.location
+        self.camera.look_at = view.look_at
+        self.camera.lens_mm = view.lens_mm
+        self.transform.origin_shift = view.origin_shift
+        return self
 
 
 # =============================================================================
@@ -1872,7 +1989,9 @@ def _cloud_footprint(
     Where hydrometeors exist at any render time, as 1-D masks per axis.
 
     A cell counts when its total mixing ratio exceeds
-    ``FOOTPRINT_MIXING_RATIO_THRESHOLD``.
+    ``FOOTPRINT_MIXING_RATIO_THRESHOLD``. With a cloud ``weight``, the total
+    is multiplied by the weight first, so a faded-out neighbouring storm does
+    not widen the crop or the automatic camera framing.
 
     Used to crop the exported volume to the cloudy region (plus a margin), so a
     large domain with one storm does not produce mostly-empty VDBs.
@@ -1905,6 +2024,12 @@ def _cloud_footprint(
                 if total_condensate is None
                 else total_condensate + mixing_ratio
             )
+        # Weighted-out cloud does not count as present.
+        weight_variable = spec.geometry.weight
+        if weight_variable is not None:
+            total_condensate = total_condensate * dataset_at_time[weight_variable].clip(
+                0.0, 1.0
+            ).fillna(0.0)
         has_condensate = (
             total_condensate > FOOTPRINT_MIXING_RATIO_THRESHOLD
         ).transpose(x_name, y_name, z_name)
@@ -1989,6 +2114,9 @@ def _build_cloud_entry(
                 break
     if isinstance(air_density_setting, str):
         needed_variables.append(air_density_setting)
+    # The weight is cropped and resampled along with the optics inputs.
+    if geometry.weight is not None:
+        needed_variables.append(geometry.weight)
     cloud_dataset = dataset[sorted(set(needed_variables))]
 
     # ---- 1. Crop to the cloudy footprint over all times

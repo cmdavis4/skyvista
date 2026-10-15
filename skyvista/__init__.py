@@ -158,6 +158,7 @@ from .blender import (
     BlenderHoldConfig,
     BlenderRenderConfig,
     BlenderTransform,
+    BlenderView,
 )
 
 # Cloud optics: hydrometeor species definitions and microphysics presets
@@ -262,6 +263,7 @@ __all__ = [
     "BlenderCameraConfig",
     "BlenderExportConfig",
     "BlenderHoldConfig",
+    "BlenderView",
     "BlenderRenderConfig",
     "BlenderTransform",
     "load_example_storm_data",

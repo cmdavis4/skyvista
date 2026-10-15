@@ -262,6 +262,7 @@ class Scene:
         air_density: Union[str, float, None] = None,
         vertical_spacing: Optional[float] = None,
         extinction_floor: float = 1.0e-6,
+        weight: Optional[str] = None,
         extinction_scale: float = 1.0,
         cutaway: Optional[Tuple[Tuple[float, ...], Tuple[float, ...]]] = None,
         **kwargs,
@@ -282,6 +283,9 @@ class Scene:
             air_density: Variable name, constant (kg m^-3), or None to search.
             vertical_spacing: Uniform vertical voxel size (m) for VDB export.
             extinction_floor: Extinction (m^-1) treated as clear air.
+            weight: Name of a variable between 0 and 1 that multiplies the
+                extinction point by point; 0 removes the cloud there. Use it
+                to fade out a neighbouring storm.
             extinction_scale: Multiplier on extinction; 1.0 is physical.
             cutaway: ``(point, normal)`` in data coordinates: remove the cloud
                 on the side of this plane that the normal points to, e.g.
@@ -299,6 +303,7 @@ class Scene:
             air_density=air_density,
             vertical_spacing=vertical_spacing,
             extinction_floor=extinction_floor,
+            weight=weight,
             extinction_scale=extinction_scale,
             cutaway=cutaway,
             **kwargs,
@@ -825,6 +830,37 @@ class Scene:
             quiet=quiet,
         )
         return self
+
+    def blender_view(
+        self,
+        config: Optional["Any"] = None,
+        times: Optional[List[Any]] = None,
+    ) -> "Any":
+        """
+        The automatic Blender camera and scene origin of this scene.
+
+        The camera is placed from the exported data's bounds, so this method
+        exports the scene to a temporary directory and reads the view back.
+        Nothing is built or rendered. Pass the result to
+        ``BlenderExportConfig.use_view`` to frame other exports the same way,
+        e.g. the panels of a side-by-side figure.
+
+        Args:
+            config: The ``BlenderExportConfig`` that the scene would be
+                exported with. Its camera angles, distance and lens decide
+                the view.
+            times: Times to export (default: all times across datasets).
+
+        Returns:
+            A ``skyvista.blender.BlenderView``.
+        """
+        import tempfile
+
+        from .blender import BlenderView, export_scene_to_blender
+
+        with tempfile.TemporaryDirectory(prefix="skyvista_view_") as bundle_dir:
+            export_scene_to_blender(self, bundle_dir, config=config, times=times)
+            return BlenderView.from_bundle(bundle_dir)
 
     def export_html(
         self,

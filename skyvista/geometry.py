@@ -220,6 +220,11 @@ class CloudGeometry(Geometry):
         extinction_floor: Render extinction (m^-1) below which a voxel is
             treated as clear air and dropped from the VDB. The default 1e-6
             m^-1 is an optical depth of 0.001 per kilometre.
+        weight: Name of a dataset variable between 0 and 1 that multiplies
+            every species' extinction point by point. 0 removes the cloud, and
+            values between fade it. The particle sizes, and so the phase
+            functions, are unchanged. A typical use fades out a neighbouring
+            storm. The variable may lack dimensions, e.g. be (y, x) only.
     """
 
     species: Optional[Sequence["HydrometeorSpecies"]] = None
@@ -227,6 +232,7 @@ class CloudGeometry(Geometry):
     air_density: Union[str, float, None] = None
     vertical_spacing: Optional[float] = None
     extinction_floor: float = 1.0e-6
+    weight: Optional[str] = None
 
 
 @dataclass

@@ -25,7 +25,6 @@ from typing import List, Tuple
 import numpy as np
 from cloud_render_config import add_render_arguments, make_cloud_export_config
 from rams_lite_loader import load_rams_lite_hydrometeors
-from render_rams_streamlines_side_by_side import pinned_view
 from side_by_side_figure import ColorbarSpec, compose_side_by_side
 
 import skyvista as sv
@@ -159,10 +158,9 @@ def main() -> None:
     )
 
     # ---- Right panel: same view, thinned cloud, dye.
-    camera_location, camera_look_at, origin_shift = pinned_view(realistic_dir)
-    dye_config = make_cloud_export_config(arguments, origin_shift=origin_shift)
-    dye_config.camera.location = camera_location
-    dye_config.camera.look_at = camera_look_at
+    dye_config = make_cloud_export_config(arguments).use_view(
+        sv.BlenderView.from_bundle(realistic_dir)
+    )
     dye_config.world.aerial_perspective = True
     dye_config.world.visibility_km = arguments.visibility_km
     dye_config.overlay_colorbars = False

@@ -36,7 +36,6 @@ What it does
 """
 
 import argparse
-import json
 from pathlib import Path
 
 import numpy as np
@@ -222,17 +221,6 @@ def cloud_export_config() -> sv.BlenderExportConfig:
     return config
 
 
-def pinned_view(bundle_dir: Path):
-    """Camera location, aim point and scene origin shift of a built bundle."""
-    manifest = json.loads((bundle_dir / "scene.json").read_text())
-    (keyframe,) = manifest["camera"]["keyframes"]
-    return (
-        tuple(keyframe["location"]),
-        tuple(keyframe["look_at"]),
-        tuple(manifest["transform"]["origin_shift"]),
-    )
-
-
 def register_arrow_colormap() -> None:
     """Register the blue-grey-red map by name (the exporter looks it up so)."""
     if ARROW_COLORMAP_NAME not in colormaps:
@@ -401,12 +389,9 @@ def main() -> None:
     )
 
     # ---- Right panel: same view, cut cloud, arrows on the cut.
-    camera_location, camera_look_at, origin_shift = pinned_view(realistic_dir)
     cutaway_config = cloud_export_config()
     cutaway_config.render.samples = arguments.samples
-    cutaway_config.transform.origin_shift = origin_shift
-    cutaway_config.camera.location = camera_location
-    cutaway_config.camera.look_at = camera_look_at
+    cutaway_config.use_view(sv.BlenderView.from_bundle(realistic_dir))
     # The figure draws its own colorbar.
     cutaway_config.overlay_colorbars = False
 

@@ -1215,6 +1215,9 @@ class CloudSpec(VarSpec):
         """
         Optics of every species at one time, by default with ``extinction_scale``.
 
+        The geometry's ``weight`` variable, if any, always multiplies the
+        extinctions: it decides which cloud exists, not how it is drawn.
+
         Args:
             dataset_at_time: Model output at a single time.
             vertical_coordinate_name: Height coordinate (meters), used only
@@ -1232,6 +1235,16 @@ class CloudSpec(VarSpec):
             dataset_at_time, self.geometry.air_density, vertical_coordinate_name
         )
         optics_per_species = compute_cloud_optics(dataset_at_time, species, air_density)
+
+        # The point-by-point weight (e.g. 0 over a neighbouring storm). It
+        # scales extinction only: scaling the mixing ratios instead would
+        # shrink the particles of species with a fixed number concentration.
+        weight_variable = self.geometry.weight
+        if weight_variable is not None:
+            weight = dataset_at_time[weight_variable].clip(0.0, 1.0).fillna(0.0)
+            for optics in optics_per_species:
+                optics.extinction = optics.extinction * weight
+                optics.render_extinction = optics.render_extinction * weight
 
         # A deliberate, user-requested departure from physical extinction.
         extinction_scale = self.appearance.extinction_scale

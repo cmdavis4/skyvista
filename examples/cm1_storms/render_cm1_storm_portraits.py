@@ -63,6 +63,10 @@ CM1_CLOUD_VARIABLES = (
 # of the selected cell's size; smaller cells are fragments of the same storm.
 COMPETING_CELL_MINIMUM_SIZE_FRACTION = 0.1
 
+# Dataset variable holding the (y, x) weight that fades out neighbouring
+# cells; add_clouds(weight=...) multiplies the cloud's extinction by it.
+STORM_WEIGHT_VARIABLE = "storm_weight"
+
 
 @dataclass
 class StormView:
@@ -275,25 +279,13 @@ def isolate_tracked_cell(
     See :func:`tracked_cell_keep_weight` for how the cell is cut out.
 
     Returns:
-        The weighted dataset, and the selected cell's (x, y) position (m).
+        The dataset with the keep weight added as STORM_WEIGHT_VARIABLE, and
+        the selected cell's (x, y) position (m).
     """
     keep_weight, selected_position = tracked_cell_keep_weight(
         clouds, view.run_dir, taper_width
     )
-    return apply_keep_weight(clouds, keep_weight), selected_position
-
-
-def apply_keep_weight(clouds: xr.Dataset, keep_weight: xr.DataArray) -> xr.Dataset:
-    """
-    Scale every hydrometeor field by a (y, x) weight between 0 and 1.
-
-    Mixing ratios and number concentrations are scaled together, so the
-    particle sizes, and with them the optics per unit mass, are kept.
-    """
-    hydrometeor_variables = [name for name in clouds.data_vars if name != "rho"]
-    return clouds.assign(
-        {name: clouds[name] * keep_weight for name in hydrometeor_variables}
-    )
+    return clouds.assign({STORM_WEIGHT_VARIABLE: keep_weight}), selected_position
 
 
 def tracked_cell_keep_weight(
@@ -440,6 +432,7 @@ def main() -> None:
             species=species,
             vertical_spacing=view.vertical_spacing,
             cutaway=view.cutaway,
+            weight=(STORM_WEIGHT_VARIABLE if STORM_WEIGHT_VARIABLE in clouds else None),
         ).to_blender(
             bundle_dir,
             config=make_export_config(view, arguments, target_xy),

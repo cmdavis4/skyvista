@@ -37,7 +37,6 @@ Two presentation choices:
 """
 
 import argparse
-import json
 from pathlib import Path
 
 import numpy as np
@@ -222,17 +221,6 @@ def distance_to_cloud_on_plane(
     return distance_band[:, plane_row_in_band, :]
 
 
-def pinned_view(bundle_dir: Path):
-    """Camera location, aim point and scene origin shift from a built bundle."""
-    manifest = json.loads((bundle_dir / "scene.json").read_text())
-    (keyframe,) = manifest["camera"]["keyframes"]
-    return (
-        tuple(keyframe["location"]),
-        tuple(keyframe["look_at"]),
-        tuple(manifest["transform"]["origin_shift"]),
-    )
-
-
 def arrow_colormap_name(cutaway: bool) -> str:
     """
     Name of the arrow colormap, registering the cut-away one on first use.
@@ -380,11 +368,10 @@ def main() -> None:
     )
 
     # ---- Right panel: same view, thinned cloud, arrows on a vertical plane.
-    camera_location, camera_look_at, origin_shift = pinned_view(realistic_dir)
-    wind_config = make_cloud_export_config(arguments, origin_shift=origin_shift)
-    wind_config.camera.location = camera_location
-    wind_config.camera.look_at = camera_look_at
-    wind_config.camera.lens_mm *= arguments.zoom
+    # The view carries the left panel's zoomed lens.
+    wind_config = make_cloud_export_config(arguments).use_view(
+        sv.BlenderView.from_bundle(realistic_dir)
+    )
     # The figure draws its own, larger colorbar.
     wind_config.overlay_colorbars = False
 

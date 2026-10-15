@@ -295,6 +295,24 @@ class TestCloudSpec:
             rtol=1e-6,
         )
 
+    def test_weight_multiplies_extinction_point_by_point(self, rams_like_dataset):
+        """A weight along x only: 0 west of the domain centre, 0.5 east of it."""
+        x_coordinates = rams_like_dataset["x"]
+        x_center = float(x_coordinates.mean())
+        weighted_dataset = rams_like_dataset.assign(
+            storm_weight=xr.where(x_coordinates < x_center, 0.0, 0.5)
+        )
+        physical = sv.make_clouds().create_mesh(weighted_dataset, 0.0)
+        weighted = sv.make_clouds(weight="storm_weight").create_mesh(
+            weighted_dataset, 0.0
+        )
+        expected_factor = np.where(physical.points[:, 0] < x_center, 0.0, 0.5)
+        np.testing.assert_allclose(
+            weighted.point_data["cloud_extinction"],
+            expected_factor * physical.point_data["cloud_extinction"],
+            rtol=1e-6,
+        )
+
 
 # =============================================================================
 # BLENDER EXPORT
@@ -402,6 +420,29 @@ class TestCloudExport:
         assert stored_maximum <= expected_maximum * (1.0 + 1e-5)
         assert stored_maximum > 0.8 * expected_maximum
 
+    def test_weighted_out_cloud_is_cropped_away(self, rams_like_dataset, tmp_path):
+        """Cloud with weight 0 does not widen the exported volume."""
+        # The cloud is centred on the domain, which spans x = 0 to 5.5 km.
+        x_coordinates = rams_like_dataset["x"]
+        x_center = float(x_coordinates.mean())
+        weighted_dataset = rams_like_dataset.assign(
+            storm_weight=xr.where(x_coordinates < x_center, 0.0, 1.0)
+        )
+
+        def exported_x_minimum(bundle_name, **cloud_kwargs):
+            sv.Scene().add_clouds(weighted_dataset, **cloud_kwargs).to_blender(
+                tmp_path / bundle_name
+            )
+            manifest = json.loads((tmp_path / bundle_name / "scene.json").read_text())
+            return manifest["bounds"][0][0]
+
+        # The whole cloud reaches the domain's west edge. The weighted one
+        # starts one cell (the crop margin) west of the domain centre.
+        assert exported_x_minimum("physical") == pytest.approx(0.0)
+        assert exported_x_minimum("weighted", weight="storm_weight") >= (
+            x_center - 500.0
+        )
+
     def test_z_exaggeration_warns_for_clouds(self, rams_like_dataset, tmp_path):
         config = sv.BlenderExportConfig.for_clouds()
         config.transform.z_exaggeration = 2.0
@@ -458,3 +499,52 @@ def test_camera_below_the_data_warns(tmp_path):
         sv.Scene().add_vectors(dataset, "wind", u="u", v="v", w="w").to_blender(
             tmp_path / "bundle", config=config
         )
+
+
+# =============================================================================
+# SHARED VIEWS AND RENDER QUALITY
+# =============================================================================
+def small_wind_dataset():
+    """A uniform wind on a 2 km cube; vector glyphs export without OpenVDB."""
+    x = np.linspace(-1000.0, 1000.0, 5)
+    return xr.Dataset(
+        {name: (("x", "y", "z"), np.ones((5, 5, 5))) for name in ("U", "V", "W")},
+        coords={"x": x, "y": x, "z": np.linspace(0.0, 2000.0, 5)},
+    )
+
+
+def test_blender_view_matches_the_exported_camera(tmp_path):
+    """Scene.blender_view returns the camera that an export writes."""
+    scene = sv.Scene().add_vectors(small_wind_dataset(), "wind", u="U", v="V", w="W")
+    config = sv.BlenderExportConfig()
+    config.camera.lens_mm = 42.0
+    scene.to_blender(tmp_path / "bundle", config=config)
+    exported_view = sv.BlenderView.from_bundle(tmp_path / "bundle")
+    assert scene.blender_view(config) == exported_view
+    assert exported_view.lens_mm == 42.0
+
+
+def test_use_view_pins_camera_and_origin(tmp_path):
+    """A second export with use_view writes the first export's view."""
+    first_scene = sv.Scene().add_vectors(
+        small_wind_dataset(), "wind", u="U", v="V", w="W"
+    )
+    view = first_scene.blender_view()
+    # A smaller second dataset would get a different automatic camera.
+    second_dataset = small_wind_dataset().isel(x=slice(0, 3))
+    second_scene = sv.Scene().add_vectors(second_dataset, "wind", u="U", v="V", w="W")
+    second_config = sv.BlenderExportConfig().use_view(view)
+    second_scene.to_blender(tmp_path / "second", config=second_config)
+    assert sv.BlenderView.from_bundle(tmp_path / "second") == view
+
+
+def test_render_quality_presets():
+    preview = sv.BlenderExportConfig.for_clouds(quality="preview")
+    assert preview.render.samples == 16
+    assert preview.render.resolution == (960, 540)
+    # Without a quality, the defaults are the "final" preset.
+    final = sv.BlenderExportConfig.for_clouds()
+    assert final.render.samples == 128
+    assert final.render.resolution == (1920, 1080)
+    with pytest.raises(ValueError, match="Unknown render quality"):
+        sv.BlenderRenderConfig().set_quality("draft")

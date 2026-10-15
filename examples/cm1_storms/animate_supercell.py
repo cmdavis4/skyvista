@@ -34,7 +34,7 @@ from render_cm1_storm_portraits import (
     DC_ENTRAINMENT_DATA_ROOT,
     DROPLET_NUMBER_PER_CUBIC_METER,
     HAIL_DENSITY,
-    apply_keep_weight,
+    STORM_WEIGHT_VARIABLE,
     output_path_at_time,
     tracked_cell_keep_weight,
 )
@@ -185,13 +185,19 @@ def build_frame(time_seconds: float) -> sv.Scene:
     """
     clouds = load_storm_region(time_seconds)
     fade = left_mover_fade(time_seconds)
-    if fade > 0.0:
-        keep_weight, _ = tracked_cell_keep_weight(
-            clouds, SUPERCELL_RUN_DIR, ISOLATION_TAPER
+    if fade == 0.0:
+        return sv.Scene().add_clouds(
+            clouds, species=SPECIES, vertical_spacing=VERTICAL_SPACING
         )
-        clouds = apply_keep_weight(clouds, 1.0 - fade * (1.0 - keep_weight))
+    keep_weight, _ = tracked_cell_keep_weight(
+        clouds, SUPERCELL_RUN_DIR, ISOLATION_TAPER
+    )
+    clouds = clouds.assign({STORM_WEIGHT_VARIABLE: 1.0 - fade * (1.0 - keep_weight)})
     return sv.Scene().add_clouds(
-        clouds, species=SPECIES, vertical_spacing=VERTICAL_SPACING
+        clouds,
+        species=SPECIES,
+        vertical_spacing=VERTICAL_SPACING,
+        weight=STORM_WEIGHT_VARIABLE,
     )
 
 

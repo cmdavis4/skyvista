@@ -22,7 +22,6 @@ comes from and where it goes. Cones along each tube point downstream.
 """
 
 import argparse
-import json
 from pathlib import Path
 
 import numpy as np
@@ -104,17 +103,6 @@ def storm_motion_estimate(winds) -> tuple:
     return (float(layer["U"].mean()), float(layer["V"].mean()), 0.0)
 
 
-def pinned_view(bundle_dir: Path):
-    """Camera location, aim point and scene origin shift from a built bundle."""
-    manifest = json.loads((bundle_dir / "scene.json").read_text())
-    (keyframe,) = manifest["camera"]["keyframes"]
-    return (
-        tuple(keyframe["location"]),
-        tuple(keyframe["look_at"]),
-        tuple(manifest["transform"]["origin_shift"]),
-    )
-
-
 def main() -> None:
     arguments = parse_arguments()
     arguments.output_dir.mkdir(parents=True, exist_ok=True)
@@ -139,10 +127,9 @@ def main() -> None:
     )
 
     # ---- Right panel: same view, thinned cloud, storm-relative streamlines.
-    camera_location, camera_look_at, origin_shift = pinned_view(realistic_dir)
-    streamline_config = make_cloud_export_config(arguments, origin_shift=origin_shift)
-    streamline_config.camera.location = camera_location
-    streamline_config.camera.look_at = camera_look_at
+    streamline_config = make_cloud_export_config(arguments).use_view(
+        sv.BlenderView.from_bundle(realistic_dir)
+    )
     streamline_config.world.aerial_perspective = True
     streamline_config.world.visibility_km = arguments.visibility_km
     streamline_config.overlay_colorbars = False

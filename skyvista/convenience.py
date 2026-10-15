@@ -205,6 +205,7 @@ def make_clouds(
     air_density: Union[str, float, None] = None,
     vertical_spacing: Optional[float] = None,
     extinction_floor: float = 1.0e-6,
+    weight: Optional[str] = None,
     # Appearance
     extinction_scale: float = 1.0,
     cutaway: Optional[
@@ -235,6 +236,9 @@ def make_clouds(
             None picks the finest native spacing among cloudy levels,
             floored at a quarter of the horizontal spacing.
         extinction_floor: Extinction (m^-1) below which voxels count as clear.
+        weight: Name of a dataset variable between 0 and 1 that multiplies
+            the extinction point by point, e.g. 0 over a neighbouring storm
+            (see ``CloudGeometry.weight``).
         extinction_scale: Multiplier on extinction; 1.0 is physical.
         cutaway: ``(point, normal)``: remove the cloud on the side of this
             plane that the normal points to (see ``CloudAppearance.cutaway``).
@@ -254,6 +258,7 @@ def make_clouds(
         air_density=air_density,
         vertical_spacing=vertical_spacing,
         extinction_floor=extinction_floor,
+        weight=weight,
     )
     appearance = CloudAppearance(extinction_scale=extinction_scale, cutaway=cutaway)
     return CloudSpec(

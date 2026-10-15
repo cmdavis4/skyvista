@@ -39,6 +39,11 @@ python = "3.13.*"
 openvdb = "<13"
 hdf5plugin = ">=7.1.0,<8"
 
+# The example notebooks read RAMS and CM1 output with xarrams. skyvista itself
+# does not depend on it.
+[feature.blender.pypi-dependencies]
+xarrams = ">=1.1.0"
+
 # 1.8.12 is the first alembic3d release with actual PyAlembic wheels (cp310-
 # cp313); it bundles the imath bindings the writer needs. The 0.0.1 release is
 # only a name-reservation placeholder (no bindings) -- do NOT let the solver
