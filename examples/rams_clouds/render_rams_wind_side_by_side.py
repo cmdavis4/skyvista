@@ -86,19 +86,19 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--stride",
         type=int,
-        default=12,
+        default=16,
         help="Keep every n-th grid point along x and z for arrows.",
     )
     parser.add_argument(
         "--arrow-length-per-mps",
         type=float,
-        default=80.0,
+        default=110.0,
         help="Arrow length (m) per m/s of wind speed.",
     )
     parser.add_argument(
         "--arrow-width",
         type=float,
-        default=65.0,
+        default=90.0,
         help="Arrow shaft diameter (m); the head scales with it.",
     )
     parser.add_argument(
@@ -153,6 +153,25 @@ def parse_arguments() -> argparse.Namespace:
             "Factor on the focal length of both panels. The camera stays where"
             " the automatic framing puts it, so this narrows the view onto the"
             " storm without changing the perspective."
+        ),
+    )
+    parser.add_argument(
+        "--arrow-panel-zoom",
+        type=float,
+        default=1.2,
+        help=(
+            "Extra focal-length factor for the arrow panel only. Above 1, the"
+            " arrow panel is also re-aimed at the middle of the drawn arrows,"
+            " so it zooms onto them; the two panels then differ in framing."
+        ),
+    )
+    parser.add_argument(
+        "--arrow-panel-aim-shift",
+        type=float,
+        default=0.0,
+        help=(
+            "With --arrow-panel-zoom, move the arrow panel's aim point up (m),"
+            " or down if negative, to keep labels clear of the arrows."
         ),
     )
     parser.add_argument(
@@ -407,6 +426,23 @@ def main() -> None:
         wind_plane = wind_plane.assign_coords(
             y=wind_plane["y"] - arguments.arrow_offset
         )
+
+    # Optionally zoom the arrow panel onto the arrows: aim at the middle of
+    # the drawn arrows' bounding box, from the same camera position.
+    if arguments.arrow_panel_zoom != 1.0:
+        arrow_lattice = wind_plane.isel(
+            x=slice(None, None, arguments.stride), z=slice(None, None, arguments.stride)
+        )
+        drawn_arrows = arrow_lattice["show_arrow"].isel(y=0)
+        drawn_z_values = drawn_arrows["z"].values[drawn_arrows.any("x").values]
+        drawn_x_values = drawn_arrows["x"].values[drawn_arrows.any("z").values]
+        wind_config.camera.look_at = (
+            float(drawn_x_values.min() + drawn_x_values.max()) / 2.0,
+            float(wind_plane["y"].values[0]),
+            float(drawn_z_values.min() + drawn_z_values.max()) / 2.0
+            + arguments.arrow_panel_aim_shift,
+        )
+        wind_config.camera.lens_mm *= arguments.arrow_panel_zoom
 
     # Arrows: full 3-D wind, colored by w, length proportional to speed.
     arrows = sv.make_vectors(
