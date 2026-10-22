@@ -4,9 +4,10 @@ Shared setup for the skyvista example notebooks.
 Every notebook starts with ``import notebook_setup as setup``. Importing this
 module:
 
-1. tells skyvista where ffmpeg is (``$SKYVISTA_FFMPEG``, unless already
-   set); Blender itself comes from the pixi environment, as the ``bpy``
-   module;
+1. tells skyvista where ffmpeg is, if ``FFMPEG_EXECUTABLE`` is set
+   (``$SKYVISTA_FFMPEG``, unless already set); otherwise skyvista uses the
+   pixi environment's ffmpeg. Blender itself also comes from the pixi
+   environment, as the ``bpy`` module;
 2. lets h5py read ZFP-compressed RAMS output (see below);
 3. silences two warnings that say nothing useful here.
 
@@ -23,10 +24,10 @@ from pathlib import Path
 # =============================================================================
 # Paths: edit these for your machine
 # =============================================================================
-# An ffmpeg for encoding videos.
-FFMPEG_EXECUTABLE = Path(
-    "/home/cmdavis4/projects/dc_entrainment/.pixi/envs/default/bin/ffmpeg"
-)
+# An ffmpeg for encoding videos. None uses the ffmpeg of the pixi ``blender``
+# environment, which skyvista finds on the PATH. Set a path only to use a
+# different ffmpeg.
+FFMPEG_EXECUTABLE = None
 
 # A RAMS run of an isolated storm, and one lite output time near its peak.
 RAMS_STORM_OUTPUT_DIR = Path(
@@ -47,6 +48,8 @@ CM1_ISOLATED_STORM_RUN = (
     CM1_DATA_ROOT / "ic/higher_res/test_compression_tapfrq-10_prclfrq-10"
 )
 CM1_SUPERCELL_RUN = CM1_DATA_ROOT / "sc/higher_res/dx-250_nstar-1e-07-nx-1500_ny-1060"
+# A CM1 squall line in a domain that is periodic on all four sides.
+CM1_SQUALL_LINE_RUN = CM1_DATA_ROOT / "sl/sl_mulholland21/bcs-periodic_nstar-1e-7"
 
 # Where the notebooks write bundles, renders and videos.
 WORK_DIR = Path(__file__).resolve().parent / "work"
@@ -64,8 +67,16 @@ warnings.filterwarnings("ignore", message="The 'phony_dims' kwarg now defaults")
 # include. Importing hdf5plugin registers it with h5py.
 import hdf5plugin  # noqa: E402, F401
 
-# skyvista falls back to this when no ffmpeg is passed explicitly.
-os.environ.setdefault("SKYVISTA_FFMPEG", str(FFMPEG_EXECUTABLE))
+# skyvista falls back to this when no ffmpeg is passed explicitly. A path that
+# does not exist is ignored with a warning, so the ffmpeg on the PATH is used.
+if FFMPEG_EXECUTABLE is not None:
+    if Path(FFMPEG_EXECUTABLE).exists():
+        os.environ.setdefault("SKYVISTA_FFMPEG", str(FFMPEG_EXECUTABLE))
+    else:
+        warnings.warn(
+            f"FFMPEG_EXECUTABLE {FFMPEG_EXECUTABLE} does not exist; "
+            "using the ffmpeg on the PATH instead."
+        )
 
 WORK_DIR.mkdir(exist_ok=True)
 

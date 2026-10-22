@@ -40,6 +40,9 @@ python = "3.13.*"
 # programs (via $SKYVISTA_BLENDER) working.
 openvdb = "<13"
 hdf5plugin = ">=7.1.0,<8"
+# BlenderAnimation.encode() writes the videos with ffmpeg, which it finds on
+# the PATH of the activated environment.
+ffmpeg = "*"
 
 # The example notebooks read RAMS and CM1 output with xarrams. skyvista itself
 # does not depend on it.

@@ -13,9 +13,10 @@ supercell.
 | `04_animation_and_tracking.ipynb` | Animations over model time: a time-lapse with a fixed camera, then a camera that follows a storm along its tobac track, with the neighbouring storm faded out and per-frame captions. |
 | `05_flow_at_a_fixed_time.ipynb` | One output time held still while cones move along the streamlines at the speed of the air, rendered as a seamless loop. |
 | `06_parcel_trajectories.ipynb` | CM1 parcel trajectories: the parcels in a storm's updraft drawn as tapered trails, alone and inside a see-through cloud, and an animation in which the trails follow the parcels. |
+| `07_squall_line_animation.ipynb` | A CM1 squall line animated without a storm track: the camera follows the centroid of the surface rain, the periodic line is tiled so its ends stay out of frame, and camera positions are tried on single still images first. |
 
 Start with notebook 01. Notebooks 02 and 03 use its camera and sun.
-Notebook 05 builds on notebook 02. Each notebook runs on its own.
+Notebook 05 builds on notebook 02, and notebook 07 on notebook 04. Each notebook runs on its own.
 
 The notebooks read the model output with
 [xarrams](https://pypi.org/project/xarrams/), a separate package for RAMS
@@ -24,11 +25,10 @@ and CM1 output. skyvista does not depend on it: any xarray `Dataset` with
 
 ## Running them
 
-1. Edit the paths at the top of `notebook_setup.py`: an ffmpeg (for the
-   videos) and the model output.
+1. Edit the paths to the model output at the top of `notebook_setup.py`.
 2. Start Jupyter in the pixi `blender` environment, from the repository
-   root. This environment includes Blender itself (the `bpy` module) and
-   `xarrams`:
+   root. This environment includes Blender itself (the `bpy` module),
+   `xarrams` and ffmpeg:
 
    ```bash
    pixi run -e blender jupyter lab examples/notebooks
@@ -36,7 +36,7 @@ and CM1 output. skyvista does not depend on it: any xarray `Dataset` with
 
 The renders use skyvista's "preview" quality (16 samples per pixel) and
 small images, so each takes from seconds to a few minutes on a many-core
-machine. Notebook 04 is the longest, at about 15 minutes. Everything a notebook makes goes into `work/` (ignored by
+machine. Notebooks 04 and 07 are the longest, at about 15 and 30 minutes. Everything a notebook makes goes into `work/` (ignored by
 git).
 
 The command-line scripts in `../rams_clouds` and `../cm1_storms` make the
