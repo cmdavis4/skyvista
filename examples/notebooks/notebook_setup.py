@@ -5,9 +5,10 @@ Every notebook starts with ``import notebook_setup as setup``. Importing this
 module:
 
 1. tells skyvista where ffmpeg is, if ``FFMPEG_EXECUTABLE`` is set
-   (``$SKYVISTA_FFMPEG``, unless already set); otherwise skyvista uses the
-   pixi environment's ffmpeg. Blender itself also comes from the pixi
-   environment, as the ``bpy`` module;
+   (``$SKYVISTA_FFMPEG``, unless already set); otherwise skyvista finds one
+   itself (see below). Blender itself is the ``bpy`` module, installed by
+   ``pip install "skyvista[notebooks]"`` or the pixi ``blender``
+   environment;
 2. lets h5py read ZFP-compressed RAMS output (see below);
 3. silences two warnings that say nothing useful here.
 
@@ -24,9 +25,10 @@ from pathlib import Path
 # =============================================================================
 # Paths: edit these for your machine
 # =============================================================================
-# An ffmpeg for encoding videos. None uses the ffmpeg of the pixi ``blender``
-# environment, which skyvista finds on the PATH. Set a path only to use a
-# different ffmpeg.
+# An ffmpeg for encoding videos. None lets skyvista find one: the ffmpeg on
+# the PATH (the pixi ``blender`` environment has one), else the binary of the
+# ``imageio-ffmpeg`` package (installed by the pip extras). Set a path only to
+# use a different ffmpeg.
 FFMPEG_EXECUTABLE = None
 
 # A RAMS run of an isolated storm, and one lite output time near its peak.

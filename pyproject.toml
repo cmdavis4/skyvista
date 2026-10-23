@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "skyvista"
-version = "1.2.0"
+version = "1.3.0"
 description = "PyVista-based 3D visualization for atmospheric data"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -43,14 +43,19 @@ dev = [
     "ruff",
     "mypy",
 ]
-# Blender export backend (mesh carrier). 'alembic3d' is the 3D Alembic bindings
-# (NOT the SQLAlchemy 'alembic' database-migration tool). Wheels currently cover
-# CPython 3.10-3.13, so pin away from 3.14 until upstream ships those wheels.
+# Blender export backend. 'alembic3d' is the 3D Alembic bindings (NOT the
+# SQLAlchemy 'alembic' database-migration tool) for the mesh carrier. Wheels
+# currently cover CPython 3.10-3.13, so pin away from 3.14 until upstream ships
+# those wheels.
 #
-# NOTE: *Volume* (VDB) export additionally needs the OpenVDB Python bindings,
-# which have NO PyPI wheel for recent Python -- install via conda-forge
-# ('conda install -c conda-forge openvdb', or add 'openvdb' to a pixi feature).
-# Mesh export (contours/slices/vectors/trajectories) needs only this pip extra.
+# *Volume* (VDB) export needs the OpenVDB Python bindings, which have NO PyPI
+# wheel for recent Python. The bpy wheel bundles a copy built for its CPython,
+# and skyvista loads that copy when no other 'openvdb' module is installed, so
+# this extra covers volumes too. conda-forge's 'openvdb' takes precedence when
+# present (the pixi 'blender' environment).
+#
+# 'imageio-ffmpeg' ships an ffmpeg binary, which BlenderAnimation uses to encode
+# videos when no other ffmpeg is found.
 #
 # 'bpy' is Blender itself, built as a Python module, so building and rendering
 # need no separate Blender install. bpy 5.1+ ships wheels only for CPython 3.13,
@@ -59,6 +64,16 @@ dev = [
 blender = [
     "alembic3d; python_version < '3.14'",
     "bpy>=5.1,<6; python_version == '3.13' and ((sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'darwin' and platform_machine == 'arm64') or sys_platform == 'win32')",
+    "imageio-ffmpeg",
+]
+# What the example notebooks in examples/notebooks need beyond the Blender
+# extra: xarrams reads RAMS and CM1 output, hdf5plugin decompresses ZFP-
+# compressed RAMS output, and JupyterLab runs the notebooks.
+notebooks = [
+    "skyvista[blender]",
+    "xarrams>=1.1.0",
+    "hdf5plugin",
+    "jupyterlab",
 ]
 
 [project.urls]

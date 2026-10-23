@@ -1698,33 +1698,106 @@ def _build_vector_points_entry(
 # =============================================================================
 # Volume export (VDB)
 # =============================================================================
+def _find_bpy_bundled_openvdb() -> Optional[Path]:
+    """
+    The OpenVDB extension module that ships inside the ``bpy`` wheel, or None.
+
+    The ``bpy`` wheel carries Blender's own Python tree, and that tree holds
+    an ``openvdb`` extension module built for the same CPython, e.g.
+    ``bpy/5.2/python/lib/python3.13/site-packages/openvdb.cpython-313-...so``
+    (on Windows ``.../python/lib/site-packages/openvdb.cp313-win_amd64.pyd``).
+    The module links against the ``libopenvdb`` that ``bpy`` also ships, so it
+    imports in the host interpreter with no further install.
+
+    The ``bpy`` package is located with ``importlib.util.find_spec`` rather
+    than imported, because importing ``bpy`` starts a whole Blender session.
+    """
+    import importlib.machinery
+    import importlib.util
+
+    # Where pip installed bpy, without importing it.
+    bpy_spec = importlib.util.find_spec("bpy")
+    if bpy_spec is None or bpy_spec.origin is None:
+        return None
+    bpy_package_dir = Path(bpy_spec.origin).parent
+
+    # Search only Blender's Python tree (bpy/<version>/python), and accept only
+    # extension files built for this interpreter (e.g. ".cpython-313-...so").
+    for blender_python_dir in sorted(bpy_package_dir.glob("*/python")):
+        for extension_suffix in importlib.machinery.EXTENSION_SUFFIXES:
+            matches = sorted(blender_python_dir.rglob(f"openvdb{extension_suffix}"))
+            if matches:
+                return matches[0]
+    return None
+
+
 def _require_openvdb():
     """
     Import the OpenVDB Python bindings, or raise a helpful message.
 
     Unlike the mesh carrier (``alembic3d`` on PyPI), OpenVDB has no usable
     Python wheel for recent CPython -- the only PyPI build is CPython 3.7.
-    The practical source is conda-forge's ``openvdb`` package (natural for a
-    pixi/conda environment). The import name varies by build, so try both.
+    The bindings are therefore taken from the first of these that exists:
+
+    1. an ``openvdb`` module on the path, e.g. conda-forge's ``openvdb``
+       package (the pixi ``blender`` environment);
+    2. a ``pyopenvdb`` module, the name some other builds use;
+    3. the ``openvdb`` module bundled inside the ``bpy`` wheel, which makes
+       ``pip install "skyvista[blender]"`` enough on its own.
+
+    The bundled module (3) is loaded from its file under the name
+    ``openvdb``, and only that one file: putting Blender's whole
+    ``site-packages`` on ``sys.path`` would let Blender's copies of numpy and
+    other packages shadow the environment's own.
+
+    Gotcha: the bundled module is OpenVDB 13, which writes VDB file format
+    225. Blender 5.1+ (and so ``bpy`` itself) reads it, but a standalone
+    Blender 5.0 program named by ``$SKYVISTA_BLENDER`` cannot.
+
+    Gotcha: at interpreter exit, the bundled module prints "nanobind: leaked
+    ..." messages to stderr. They come from reference counting inside that
+    build of the bindings, not from skyvista; the files it wrote are intact.
     """
+    import importlib.util
+    import sys
+
+    # 1. conda-forge exposes the module as 'openvdb'.
     try:
-        import openvdb  # conda-forge exposes the module as 'openvdb'
+        import openvdb
 
         return openvdb
     except ImportError:
         pass
+
+    # 2. Some builds expose it as 'pyopenvdb'.
     try:
-        import pyopenvdb  # some builds expose it as 'pyopenvdb'
+        import pyopenvdb
 
         return pyopenvdb
-    except ImportError as import_error:
-        raise ImportError(
-            "Volume (VDB) export requires the OpenVDB Python bindings, which "
-            "have no PyPI wheel for recent Python. Install via conda-forge, "
-            "e.g. in pixi add 'openvdb' to a 'blender' feature, or:\n"
-            "    conda install -c conda-forge openvdb\n"
-            "Mesh export (Alembic) does not need this."
-        ) from import_error
+    except ImportError:
+        pass
+
+    # 3. The copy inside the bpy wheel, loaded from its file and registered
+    # under the name 'openvdb' so a later 'import openvdb' finds the same one.
+    bundled_module_path = _find_bpy_bundled_openvdb()
+    if bundled_module_path is not None:
+        module_spec = importlib.util.spec_from_file_location(
+            "openvdb", bundled_module_path
+        )
+        if module_spec is not None and module_spec.loader is not None:
+            openvdb_module = importlib.util.module_from_spec(module_spec)
+            module_spec.loader.exec_module(openvdb_module)
+            sys.modules["openvdb"] = openvdb_module
+            return openvdb_module
+
+    raise ImportError(
+        "Volume (VDB) export requires the OpenVDB Python bindings. Install "
+        "the Blender extra, whose 'bpy' wheel bundles them:\n"
+        '    pip install "skyvista[blender]"\n'
+        "or install them from conda-forge:\n"
+        "    conda install -c conda-forge openvdb\n"
+        "Mesh export (Alembic) does not need this."
+    )
 
 
 def _axis_voxel_size(coordinate_values: np.ndarray) -> float:

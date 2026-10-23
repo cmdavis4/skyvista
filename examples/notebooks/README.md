@@ -25,13 +25,35 @@ and CM1 output. skyvista does not depend on it: any xarray `Dataset` with
 
 ## Running them
 
+The notebooks need skyvista's Blender backend, which includes Blender
+itself (the `bpy` module) and an ffmpeg for the videos. Install it in one of
+two ways.
+
+**With pip**, in a Python 3.13 environment. The `notebooks` extra adds
+JupyterLab, `xarrams` and `hdf5plugin`:
+
+```bash
+pip install "skyvista[notebooks]"
+```
+
+Then download this folder (the notebooks and `notebook_setup.py`), or clone
+the repository.
+
+**With pixi**, from a clone of the repository. The `blender` environment
+holds the same packages:
+
+```bash
+pixi install -e blender
+```
+
+Then:
+
 1. Edit the paths to the model output at the top of `notebook_setup.py`.
-2. Start Jupyter in the pixi `blender` environment, from the repository
-   root. This environment includes Blender itself (the `bpy` module),
-   `xarrams` and ffmpeg:
+2. Start Jupyter in this folder:
 
    ```bash
-   pixi run -e blender jupyter lab examples/notebooks
+   jupyter lab                                       # pip
+   pixi run -e blender jupyter lab examples/notebooks  # pixi, from the repository root
    ```
 
 The renders use skyvista's "preview" quality (16 samples per pixel) and

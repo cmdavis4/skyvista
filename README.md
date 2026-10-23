@@ -1,55 +1,85 @@
 # skyvista
 
-**3D gridded atmospheric data visualization in Python**
-
-`skyvista` provides scientifically accurate 3D visualization of gridded atmospheric science data (but likely applicable in many other disciplines). Skyvista's visualizations are primarily built on top of the [pyvista](https://pyvista.org/#) library, and with the appropriate setup can be rendered directly in jupyter notebooks or IDEs, or written to disk. Pyvista is capable of creating interactive visualizations in pure HTML, making these visualizations conveniently portable. Skyvista also contains simplified functionality for creating animations of 3D data using pyvista, in addition to single visualizations.
+**3D visualization of gridded atmospheric data in Python**
 
 <p align="center">
-  <img src="assets/example_screenshot.png" alt="Example visualization" width="600">
+  <img src="assets/readme/backlit_storm.jpg" alt="A backlit RAMS thunderstorm, rendered with physically based cloud optics" width="800">
+</p>
+
+skyvista turns xarray datasets from atmospheric models (and other gridded data)
+into 3D figures and animations. It has two rendering backends behind one
+`Scene` API:
+
+- **PyVista**, for fast, interactive exploration in Jupyter, an IDE, or a
+  standalone HTML file.
+- **Blender**, for publication-quality renders. Clouds are drawn from the
+  model's hydrometeors with physically based optics, under a physical sky
+  and sun.
+
+<p align="center">
+  <img src="assets/readme/storm_development.gif" alt="A RAMS cumulus growing into a cumulonimbus" width="49%">
+  <img src="assets/readme/thermal_streamlines.gif" alt="Streamlines relative to a rising thermal, inside a cut-away cloud" width="37%">
 </p>
 
 ## Features
 
-- **Gridded data visualization**: Create sets of isosurfaces, volumes, vectors, or planes (for things like land/ocean surfaces or cross-sections) from xarray datasets
-- **Multiple coordinate systems**: Cartesian, geographic (lat/lon), spherical (radar range/azimuth/elevation), curvilinear, and unstructured grids with automatic detection
-- **Trajectory visualization**: Visualize Lagrangian trajectory data, with options to show trajectories as continuous arrows or as particles at their instantaneous positions
-- **Animation support**: Generate animations of time-evolving gridded atmospheric data
-- **Camera control**: Advanced camera positioning and following for dynamic views
-- **Interactive HTML export**: Export scenes to standalone interactive HTML files
-
-<p align="center">
-  <a href="assets/example_interactive.html">Interactive example (download and open in browser)</a>
-</p>
+- **Gridded data**: isosurfaces, volumes, vector glyphs, streamlines, and
+  planes such as cross-sections or the ground.
+- **Physically based clouds** (Blender): extinction and scattering computed
+  from mixing ratios and number concentrations, with presets for RAMS and CM1
+  Morrison microphysics. Aerial perspective (haze), cutaways, and fading out
+  neighbouring storms are built in.
+- **Passive-tracer dye** (Blender): tracers drawn as a colored, semi-transparent
+  dye, for example colored by the height the air started from.
+- **Trajectories**: Lagrangian parcels as arrows, particles, or tapered trails
+  that follow the parcels.
+- **Animations**: over model time, or one time held still while arrows move
+  along the streamlines. Blender animations render in parallel, resume after
+  an interruption, and encode to video.
+- **Camera paths**: keyframed cameras, or cameras that follow a storm track
+  (for example from tobac).
+- **Figure composition**: side-by-side panels with titles, timestamps,
+  colorbars, and insets laid out by matplotlib.
+- **Coordinate systems**: Cartesian, geographic (lat/lon), radar
+  (range/azimuth/elevation), curvilinear, and unstructured grids, detected
+  automatically.
 
 ## Installation
-
-First install skyvista, which will install pyvista as a dependency:
 
 ```bash
 pip install skyvista
 ```
 
-On a modern VTK (>= 9.3), rendering to disk on a headless machine works with no
-extra setup: skyvista auto-configures offscreen rendering (EGL on a GPU, OSMesa
-on CPU) when you `import skyvista`. To verify your environment, run the built-in
-doctor, which does a real offscreen render and prints an actionable fix for
-anything that's wrong:
+The Blender backend needs the `blender` extra. It installs Blender itself as
+the `bpy` module, with Alembic and OpenVDB support and an ffmpeg for videos:
+
+```bash
+pip install "skyvista[blender]"
+```
+
+`bpy` has wheels only for Python 3.13, on Linux x86-64, Apple-silicon macOS
+and Windows. Elsewhere, set `$SKYVISTA_BLENDER` to a standalone Blender 5.1+
+program. To run the example notebooks, install the `notebooks` extra instead,
+which adds JupyterLab and the model-output readers:
+
+```bash
+pip install "skyvista[notebooks]"
+```
+
+skyvista configures offscreen PyVista rendering on headless machines when it
+is imported. To check your setup, run the built-in doctor, which renders a
+test image and prints a fix for anything that fails:
 
 ```bash
 python -m skyvista        # or:  import skyvista as sv; sv.doctor()
 ```
 
-Live *interactive* plots inside Jupyter can still need a per-frontend nudge (and
-some setups need an OSMesa VTK build); see [docs/pyvista_setup_tips.md](docs/pyvista_setup_tips.md)
-for the details. You can also sanity-check PyVista directly with its sample bunny:
+Interactive plots inside Jupyter can need extra setup for some frontends. See
+[docs/pyvista_setup_tips.md](docs/pyvista_setup_tips.md).
 
-```python
-from pyvista import examples
-dataset = examples.download_bunny()
-dataset.plot(cpos='xy')
-```
+## Quick start
 
-## Quick Start
+An interactive PyVista scene:
 
 ```python
 import skyvista as sv
@@ -63,13 +93,39 @@ scene.add_contour(storm_ds, "RC", cmap="Blues", opacity=0.4)
 scene.show()
 ```
 
-For a full walkthrough of the API (convenience functions, factory functions, and VarSpec classes), see the [API guide notebook](docs/API_guide.ipynb).
+A physically based cloud rendered with Blender, from RAMS hydrometeor fields:
 
-For examples of working with different coordinate systems (geographic, radar/spherical, curvilinear), see the [coordinate systems demo](examples/coordinate_systems_demo.ipynb).
+```python
+config = sv.BlenderExportConfig.for_clouds(quality="preview")
+config.world.sun_elevation_deg = 30.0
 
-## Data Format
+sv.Scene().add_clouds(storm_ds, microphysics="rams").to_blender(
+    "storm_render", config=config, render=True
+)
+```
 
-Gridded data should be xarray `Dataset`s with dimensions `x`, `y`, `z`, and optionally `time` for animations. Skyvista auto-detects the coordinate system from coordinate names or CF convention attributes. See the [coordinate systems demo](examples/coordinate_systems_demo.ipynb) for details on supported formats.
+`to_blender` writes a self-contained bundle: the meshes and volumes, a
+`scene.json` manifest, the `.blend` file, and the rendered image.
+
+## Documentation and examples
+
+- [API guide](docs/API_guide.ipynb): the PyVista API, from convenience
+  functions to the full specification classes.
+- [Coordinate systems demo](examples/coordinate_systems_demo.ipynb):
+  geographic, radar, and curvilinear grids.
+- [Interactive HTML example](assets/example_interactive.html): a PyVista
+  scene exported to HTML (download it and open it in a browser).
+- [Blender example notebooks](examples/notebooks/README.md): storm portraits,
+  winds and streamlines, tracer dye, animations that track a storm, and parcel
+  trajectories, from RAMS and CM1 output.
+
+## Data format
+
+Gridded data are xarray `Dataset`s with `x`, `y`, and `z` coordinates (in
+meters for the Blender backend), plus an optional `time` dimension for
+animations. skyvista detects the coordinate system from coordinate names or
+CF-convention attributes. Trajectory data have `trajectory_ix` and `time`
+dimensions, with `x`, `y`, and `z` position variables.
 
 ## License
 
